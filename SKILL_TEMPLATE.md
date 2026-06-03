@@ -1,179 +1,190 @@
 ---
 name: memory-of-relics
-description: Document-oriented semantic project memory system powered by rmem-cli. Use for project tasks requiring context from //memory, including design, docs, plans, rules, tasks, architecture, implementation decisions, and agent workflow requirements. If the user request is project-related and involves changes, planning, decisions, context, or implementation work, load this skill first.
+description: Document-oriented semantic project memory workflow powered by rmem-cli 1.1.0. Use for project tasks that require context from //memory, including architecture, rules, plans, tasks, docs, implementation decisions, and agent workflow requirements. If the user request is project-related and involves changes, planning, decisions, context, or implementation work, load this skill first.
 license: MIT
------------------------
+---
 
-## Поняття та терміни
+# Memory of Relics
 
-* `//` — коренева директорія проєкту.
-* `//memory` — директорія системи памʼяті проєкту.
-* `rmem-cli` — CLI-утиліта для контрольованої роботи з памʼяттю проєкту.
-* `rmem-cli` — npm-пакет, який постачає `rmem-cli`.
-* документ памʼяті — Markdown-документ у системі памʼяті проєкту. Документи є канонічним джерелом знань.
-* записка памʼяті / note — похідний семантичний індексний вузол, створений на основі документів. Записки використовуються для пошуку, звʼязування й розгортання контексту, але не є канонічним джерелом знань.
-* semantic memory path — осмислена локація документа в системі памʼяті, де кожна одиниця шляху має короткий опис призначення.
-* context report — звіт пошуку, який повертає `rmem search`: релевантні документи, записки, фрагменти, звʼязки, структуру памʼяті та рекомендовані наступні команди.
+This skill defines how an agent works with document-oriented project memory through `rmem-cli`.
 
-## What I do / Що я роблю
+The goal is simple: use project memory as a controlled semantic filesystem, not as a pile of Markdown files searched and patched manually.
 
-Цей скіл визначає правила роботи агента з документно-орієнтованою системою памʼяті проєкту через `rmem-cli`.
+## Concepts
 
-Скіл допомагає агенту:
+- `//` — project root.
+- `//memory` — canonical project memory directory.
+- `memory/tree-index.md` — canonical human-editable index of memory folders and their descriptions.
+- `.rmem/index/tree-index.json` — derived backup/cache of `tree-index.md`, used for recovery only.
+- `rmem-cli` — npm package that provides the `rmem` command.
+- Memory document — canonical Markdown document in `//memory`.
+- Memory folder — semantic folder path defined in `memory/tree-index.md`, for example `project/architecture`.
+- Note — derived semantic index node generated from documents; notes are never canonical truth.
+- Context report — `rmem search` output with relevant documents, notes, excerpts, links, memory paths, warnings, and recommended next commands.
 
-* знаходити релевантний контекст проєкту;
-* читати документи памʼяті;
-* оновлювати документи памʼяті без прямого ручного редагування файлів;
-* перевіряти цілісність памʼяті;
-* не використовувати `rg`, `cat`, `sed` або довільне копирсання в Markdown-файлах як основний інтерфейс роботи з памʼяттю;
-* зберігати UTF-8 і не ламати український текст, бо такі “дрібниці” вже вміли знищувати корисність wiki.
+## Core Rules
 
-## When to use me / Коли використовувати мене
+### Documents are canonical
 
-Використовуй цей скіл, якщо задача:
+Canonical knowledge lives in Markdown documents under `//memory`.
 
-* стосується поточного проєкту;
-* потребує контексту з документації, правил, планів, архітектури або історії рішень;
-* передбачає зміну коду, документації, архітектури, правил або планів;
-* потребує зрозуміти попередні рішення;
-* потребує перевірити правила роботи агентів;
-* потребує оновити памʼять проєкту;
-* потребує знайти інформацію в `//memory`.
+Derived notes, links, registries, vector indexes, embeddings, and search reports are projections. They can help retrieval, but they are not source of truth.
 
-Якщо запит користувача project-related і може залежати від попереднього контексту проєкту, спочатку використовуй `rmem-cli`.
+If knowledge must change, update the relevant canonical document through `rmem`.
 
-## Do not use for / Не використовувати коли
+### `tree-index.md` is canonical for folders
 
-Не використовуй цей скіл, якщо:
+Folder descriptions and allowed memory paths come from:
 
-* питання не стосується поточного проєкту;
-* користувач просить загальну довідку без привʼязки до проєкту;
-* задача не потребує памʼяті проєкту;
-* користувач прямо заборонив використовувати памʼять проєкту.
-
-## CLI invocation / Як запускати rmem-cli
-
-`rmem-cli` постачається як npm-пакет:
-
-```bash
-rmem-cli
+```text
+memory/tree-index.md
 ```
 
-У цьому скілі команда `rmem` означає один із доступних способів запуску CLI.
+Expected format:
 
-Визнач спосіб запуску в такому порядку:
+```md
+# Memory Tree Index
 
-1. Якщо пакет встановлений у проєкті:
+<!-- rmem:tree-index start -->
 
-```bash
-pnpm exec rmem
+- `project` — General project memory.
+  - `project/architecture` — Architecture, components, and system decisions.
+  - `project/rules` — Agent and developer operating rules.
+
+<!-- rmem:tree-index end -->
 ```
 
-2. Якщо проєкт використовує npm:
+Rules:
 
-```bash
-npm exec rmem
-```
+- Do not invent folder descriptions outside `tree-index.md`.
+- A folder can be defined in `tree-index.md` before the physical directory exists.
+- If a folder is defined but the directory does not exist, `rmem write` creates it automatically.
+- If a physical folder exists but is not defined in `tree-index.md`, treat it as unregistered.
+- If `tree-index.md` is missing or invalid, normal memory operations are blocked.
 
-3. Якщо пакет не встановлений локально, але дозволено запуск npm-пакетів:
+### Do not edit memory directly when `rmem` can do it
 
-```bash
-npx -y rmem-cli
-```
-
-Після вибору способу запуску використовуй його послідовно в межах задачі.
-
-У прикладах нижче `<rmem>` означає обраний спосіб запуску, наприклад:
-
-```bash
-pnpm exec rmem search "..."
-```
-
-або:
-
-```bash
-npx -y rmem-cli search "..."
-```
-
-## Фундаментальні правила роботи з памʼяттю
-
-### 1. Документи є джерелом істини
-
-Markdown-документи в `//memory` є канонічним джерелом знань.
-
-Записки, індекси, embeddings, links і search reports є похідними представленнями.
-
-Не вважай записки основним джерелом істини. Якщо потрібно змінити знання — редагуй документ через `rmem-cli`.
-
-### 2. Не редагувати памʼять напряму
-
-Агент не повинен напряму редагувати Markdown-файли в `//memory`, якщо доступна відповідна команда `rmem-cli`.
-
-Заборонено використовувати як основний workflow:
+Do not use direct file operations as the main workflow for memory:
 
 ```bash
 rg ...
 cat ...
 sed ...
 echo ... >> ...
-manual file patch in //memory
+manual patch in //memory
 ```
 
-Правильний workflow:
+Use controlled commands:
 
 ```bash
 <rmem> search "..."
 <rmem> read <document-path>
 <rmem> edit <document-path>
+<rmem> write <document-path> --from <file>
+<rmem> folder create <memory-path> --description "..."
 <rmem> check
 ```
 
-### 3. Усі файли памʼяті мають бути UTF-8
+Exception: direct manual editing of `memory/tree-index.md` is allowed because it is intentionally human-editable. After editing it, run `rmem check`.
 
-Усі файли системи памʼяті мають бути валідним UTF-8.
+### Preserve UTF-8
 
-Це стосується:
+All memory files must be valid UTF-8.
 
-* Markdown-документів;
-* YAML;
-* JSON / JSONL;
-* registry/index/cache files;
-* fixtures;
-* generated files.
+Do not silently rewrite corrupted text. If `rmem` reports invalid UTF-8, report the issue and use a controlled fix.
 
-Якщо `rmem-cli` повідомляє про invalid UTF-8, не намагайся мовчки “полагодити” файл ручним переписуванням. Повідом користувачу про проблему або використовуй передбачену команду `rmem-cli`, якщо вона доступна.
+## CLI Invocation
 
-### 4. Пошук має бути one-shot
-
-Не виконуй довгі ланцюжки низькорівневого пошуку.
-
-Замість:
+Use the first available command form consistently within the task:
 
 ```bash
-rg "..."
-rg "..."
-cat file.md
-rg "..."
-cat another-file.md
+pnpm exec rmem
+npm exec rmem
+npx -y rmem-cli
+rmem
 ```
 
-використовуй:
+In this skill, `<rmem>` means the selected invocation.
+
+Always start by checking the CLI when unsure:
 
 ```bash
-<rmem> search "короткий опис того, що потрібно знайти"
+<rmem> --version
 ```
 
-`rmem search` має повернути context report з потрібними документами, фрагментами, записками, лінками й рекомендованими наступними командами.
+Expected version for this template:
 
-### 5. Редагування документів має бути file-like, але контрольованим
+```json
+{
+    "ok": true,
+    "version": "1.1.0"
+}
+```
 
-Для зміни документа використовуй:
+## Public Commands
+
+Normal agent-facing commands:
 
 ```bash
+<rmem> search <query>
+<rmem> list [memory-path]
+<rmem> read <document-path>
+<rmem> write <document-path> [--from <file>]
 <rmem> edit <document-path>
+<rmem> remove <document-path>
+<rmem> folder create <memory-path> --description <text> [--title <text>]
+<rmem> folder update <memory-path> --description <text> [--title <text>]
+<rmem> folder move <from-memory-path> <to-memory-path> [--description <text>] [--title <text>]
+<rmem> folder remove <memory-path> [--delete-files]
+<rmem> tree generate
+<rmem> tree repair
+<rmem> check
+<rmem> --version
 ```
 
-Input має бути JSON з exact replacement:
+Diagnostic commands live under `rmem dev ...`. Do not use them in normal workflow unless the user explicitly asks for diagnostics or the task is about `rmem-cli` development.
+
+## Standard Workflow
+
+### Before project-related work
+
+1. Select the `<rmem>` invocation.
+2. Run `rmem check`.
+3. If check passes or only non-blocking warnings exist, run `rmem search` for task context.
+4. Read recommended documents through `rmem read`.
+5. Execute the user task.
+6. If memory changes are needed, use `rmem edit`, `rmem write`, `rmem remove`, or `rmem folder ...`.
+7. Run `rmem check` after memory changes.
+
+### Search
+
+Use one-shot search first:
+
+```bash
+<rmem> search "short description of the needed context"
+```
+
+Do not replace this with repeated `rg`/`cat` scans across `//memory`.
+
+### Read
+
+Read canonical documents when search recommends them:
+
+```bash
+<rmem> read architecture/memory-model.md
+```
+
+Use the returned `documentHash` for safe edits.
+
+### Edit
+
+Use exact replacement JSON:
+
+```bash
+<rmem> edit architecture/memory-model.md < edit-request.json
+```
+
+Request format:
 
 ```json
 {
@@ -187,373 +198,188 @@ Input має бути JSON з exact replacement:
 }
 ```
 
-Правила:
+Rules:
 
-* `oldText` має знайтися рівно один раз;
-* якщо `oldText` не знайдено — команда має повернути `OLD_TEXT_NOT_FOUND`;
-* якщо `oldText` знайдено кілька разів — команда має повернути `OLD_TEXT_AMBIGUOUS`;
-* якщо hash документа не збігається — команда має повернути `DOCUMENT_HASH_MISMATCH`;
-* після зміни потрібно виконати `rmem check`.
+- `oldText` must match exactly once.
+- `OLD_TEXT_NOT_FOUND` means the current document does not contain the provided exact text.
+- `OLD_TEXT_AMBIGUOUS` means the replacement span is too small.
+- `DOCUMENT_HASH_MISMATCH` means read the document again and retry.
 
-## Public commands / Основні команди
+### Write
 
-Агент має використовувати тільки цей public API для звичайної роботи:
-
-```bash
-<rmem> search <query>
-<rmem> list [memory-path]
-<rmem> read <document-path>
-<rmem> write <document-path>
-<rmem> edit <document-path>
-<rmem> remove <document-path>
-<rmem> check
-```
-
-### `search`
-
-Пошук знань і побудова context report.
+Use `write` to create or fully replace a document:
 
 ```bash
-<rmem> search "як агент має оновлювати документи памʼяті"
+<rmem> write architecture/system.md --from ./system.md
 ```
 
-Використовуй перед:
+If the target folder is not defined in `memory/tree-index.md`, `rmem` returns `MEMORY_FOLDER_NOT_FOUND`.
 
-* зміною коду, якщо потрібен контекст;
-* зміною архітектури;
-* зміною правил;
-* оновленням документації;
-* плануванням задачі;
-* пошуком попередніх рішень.
-
-### `list`
-
-Навігація по системі памʼяті.
+Fix by creating or defining the folder:
 
 ```bash
-<rmem> list
-<rmem> list architecture
-<rmem> list agents
+<rmem> folder create project/architecture --description "Architecture, components, and system decisions."
 ```
 
-Використовуй, якщо потрібно зрозуміти структуру памʼяті або знайти документ за локацією.
+## Folder Workflow
 
-### `read`
+### Create folder
 
-Читання документа памʼяті.
+Use when a new semantic memory area is needed:
 
 ```bash
-<rmem> read architecture/memory-model.md
+<rmem> folder create project/architecture --description "Architecture, components, and system decisions."
 ```
 
-Використовуй після `search`, якщо потрібно прочитати канонічний документ повністю.
+This updates `memory/tree-index.md`. The physical folder may still be absent until the first document write.
 
-### `write`
-
-Створення або повна заміна документа.
+### Update folder description
 
 ```bash
-<rmem> write architecture/memory-model.md
+<rmem> folder update project/architecture --description "Updated architecture memory description."
 ```
 
-Content передається через stdin або через підтримуваний CLI-механізм.
+This changes folder context for `list` and `search`.
 
-Використовуй тільки коли потрібно створити новий документ або повністю замінити існуючий.
-
-### `edit`
-
-Точкове редагування документа через exact replacement.
+### Move or rename folder
 
 ```bash
-<rmem> edit architecture/memory-model.md
+<rmem> folder move project/architecture project/design --description "Design knowledge."
 ```
 
-Використовуй для більшості змін у документах памʼяті.
+This updates:
 
-### `remove`
+- `memory/tree-index.md`
+- physical directory, if it exists
+- affected document paths and `rmem.memoryPath`
+- registry, structural places, notes, and vector index consistency
 
-Архівація документа.
+Do not manually rename memory folders in the filesystem when this command is available.
+
+### Remove folder
+
+Safe default:
 
 ```bash
-<rmem> remove old/obsolete-document.md
+<rmem> folder remove project/old-area
 ```
 
-За замовчуванням це має бути архівація, а не фізичне видалення.
+This archives affected documents and removes active index state.
 
-Не видаляй документи памʼяті без явної потреби або прямої вимоги користувача.
+Destructive deletion requires explicit user intent:
 
-### `check`
+```bash
+<rmem> folder remove project/old-area --delete-files
+```
 
-Перевірка цілісності памʼяті.
+Do not use `--delete-files` unless the user explicitly requested physical recursive deletion.
+
+## Tree Index Workflow
+
+### Missing tree index
+
+If `rmem check`, `search`, `write`, `list`, `read`, `edit`, or `remove` reports `TREE_INDEX_NOT_FOUND`, normal memory operations are blocked.
+
+Recommended action:
+
+```bash
+<rmem> tree generate
+```
+
+Then fill descriptions in `memory/tree-index.md` manually or with user-approved edits, and run:
 
 ```bash
 <rmem> check
 ```
 
-Виконуй після змін у документах памʼяті.
+### Empty folder descriptions
 
-`check` має виявляти:
+`MEMORY_FOLDER_DESCRIPTION_EMPTY` means `tree-index.md` exists but has empty descriptions.
 
-* invalid UTF-8;
-* некоректний frontmatter;
-* невідповідність managed header;
-* broken links;
-* stale notes;
-* orphan notes;
-* duplicate document ids;
-* outdated embeddings/indexes;
-* проблеми registry.
+This is not a reason to invent descriptions. Ask the user or fill them only if the user asked you to maintain memory structure and enough context is available.
 
-## Setup workflow / Ініціалізація системи памʼяті
+### Invalid tree index
 
-На початку project-related задачі перевір наявність і стан системи памʼяті.
+If `TREE_INDEX_INVALID` appears:
 
-### 1. Перевірити доступність CLI
-
-Спробуй визначити доступний спосіб запуску:
+1. Do not silently fall back to `.rmem/index/tree-index.json`.
+2. Report the problem.
+3. If appropriate, run:
 
 ```bash
-pnpm exec rmem --version
+<rmem> tree repair
 ```
 
-або:
+4. Run `rmem check`.
 
-```bash
-npm exec rmem --version
-```
+## Memory Update Policy
 
-або:
+Update memory only when:
 
-```bash
-npx -y rmem-cli --version
-```
+- the user asks to update project memory;
+- the task creates a durable decision, rule, plan, or architecture change;
+- existing memory is wrong or obsolete;
+- a new document is needed for durable project context.
 
-Якщо запуск CLI недоступний через permissions або відсутність Node/npm, повідом користувачу, що памʼять проєкту не може бути використана через `rmem-cli`.
+Do not update memory for:
 
-### 2. Перевірити стан памʼяті
+- temporary thoughts;
+- guesses;
+- unverified information;
+- unrelated work;
+- facts the user has not asked to preserve.
 
-```bash
-<rmem> check
-```
+## Failure Handling
 
-Якщо `//memory` або `.rmem/config.yaml` відсутні, CLI може повернути структуровану помилку на кшталт:
+If `rmem` is unavailable:
+
+- report it;
+- do not automatically degrade into chaotic manual search over `//memory`;
+- use direct filesystem access only if the user approves or the task cannot proceed otherwise.
+
+If `rmem check` returns issues:
+
+- do not ignore them;
+- summarize the issue codes;
+- fix only issues relevant to the task unless the user asks for a full repair;
+- run `rmem check` again after fixes.
+
+If `rmem search` finds no context:
+
+- try one more refined search if useful;
+- do not invent missing project context;
+- state that memory has no relevant entry.
+
+## Critical Prohibitions
+
+Do not:
+
+- treat notes, embeddings, registry, or search output as canonical truth;
+- edit generated notes directly;
+- physically delete memory documents unless the user explicitly requested deletion;
+- use `--delete-files` without explicit user intent;
+- silently repair invalid UTF-8;
+- ignore `tree-index.md` errors;
+- create undocumented folders outside `memory/tree-index.md`;
+- use `rg` as the primary memory retrieval tool instead of `rmem search`.
+
+## Short Agent Checklist
 
 ```text
-CONFIG_NOT_FOUND
-MEMORY_ROOT_NOT_FOUND
+1. Select rmem invocation.
+2. Run rmem check.
+3. If needed, repair or generate tree-index.md with user awareness.
+4. Run rmem search for task context.
+5. Read canonical documents with rmem read.
+6. Do the task.
+7. Update memory only when durable project knowledge changed.
+8. Use folder commands before writing into new memory areas.
+9. Run rmem check after memory changes.
+10. Report used/changed memory documents and unresolved issues.
 ```
 
-### 3. Якщо памʼять відсутня
-
-Якщо `rmem-cli` підтримує команду ініціалізації, використай:
-
-```bash
-<rmem> init
-```
-
-Після ініціалізації виконай:
-
-```bash
-<rmem> check
-```
-
-Якщо команда `init` недоступна або запуск заборонено політикою середовища:
-
-* не створюй структуру `//memory` вручну без явного дозволу;
-* повідом користувачу, що потрібна ініціалізація памʼяті;
-* наведи команду, яку потрібно виконати:
-
-```bash
-npx -y rmem-cli init
-```
-
-### 4. Якщо read доступ до памʼяті відсутній
-
-Повідом користувачу, що система памʼяті недоступна.
-
-Запитай, чи продовжувати задачу без використання памʼяті проєкту, якщо це доречно.
-
-Не вигадуй контекст проєкту без доступу до памʼяті.
-
-## Standard workflow / Стандартний workflow агента
-
-### Для задачі з контекстом проєкту
-
-1. Виконати пошук:
-
-```bash
-<rmem> search "<короткий опис задачі або потрібного контексту>"
-```
-
-2. Проаналізувати context report.
-
-3. Якщо report рекомендує прочитати документ:
-
-```bash
-<rmem> read <document-path>
-```
-
-4. Виконати задачу.
-
-5. Якщо потрібно оновити памʼять:
-
-```bash
-<rmem> edit <document-path>
-```
-
-або:
-
-```bash
-<rmem> write <document-path>
-```
-
-6. Після змін:
-
-```bash
-<rmem> check
-```
-
-7. У відповіді користувачу коротко повідомити:
-
-* що було знайдено;
-* які документи памʼяті використовувались;
-* які документи памʼяті змінено;
-* чи пройшла перевірка `rmem-cli check`;
-* які проблеми залишились, якщо вони є.
-
-## Rules for updating memory / Правила оновлення памʼяті
-
-Агент може змінювати документи памʼяті тільки якщо:
-
-* користувач прямо попросив оновити памʼять;
-* задача вимагає зміни документації, правил, плану або рішення;
-* у документах памʼяті знайдено правило, яке вимагає оновлення;
-* зміна є необхідною для фіксації важливого нового рішення або стану проєкту.
-
-Агент не повинен змінювати памʼять:
-
-* для дрібних тимчасових думок;
-* для здогадок;
-* для неперевіреної інформації;
-* якщо зміна не повʼязана з проєктом;
-* якщо користувач заборонив змінювати памʼять.
-
-## Working with notes / Робота із записками
-
-Записки не є основним агентським API.
-
-Агент не повинен редагувати записки напряму.
-
-Записки можуть зʼявлятися в результатах:
-
-```bash
-<rmem> search "..."
-```
-
-Використовуй їх як:
-
-* індексні підказки;
-* навігаційні вузли;
-* семантичні звʼязки;
-* спосіб перейти до канонічного документа.
-
-Якщо потрібно змінити знання, знайди відповідний документ і редагуй його через `rmem edit`.
-
-## Dev commands / Внутрішні команди
-
-Команди `rmem dev ...` призначені для розробки, діагностики й відладки `rmem-cli`.
-
-Агент не повинен використовувати `rmem dev ...` у звичайному workflow, якщо:
-
-* користувач прямо не попросив;
-* задача не стосується розробки самого `rmem-cli`;
-* немає явної потреби діагностувати індекси, записки, embeddings або links.
-
-Приклади dev-команд можуть включати:
-
-```bash
-<rmem> dev notes list
-<rmem> dev notes read <note-id>
-<rmem> dev notes search <query>
-<rmem> dev notes rebuild
-<rmem> dev docs parse <document-path>
-<rmem> dev docs outline <document-path>
-<rmem> dev index status
-<rmem> dev index rebuild
-<rmem> dev embeddings status
-<rmem> dev links validate
-<rmem> dev search-trace <query>
-<rmem> dev doctor
-```
-
-Не використовуй dev-команди як заміну public API.
-
-## Output format / Формат відповіді після запуску скіла
-
-Після використання скіла для підготовки до задачі коротко повідом:
-
-* чи доступний `rmem-cli`;
-* чи знайдено систему памʼяті;
-* чи пройшов `rmem check`;
-* які головні документи або результати пошуку релевантні задачі;
-* чи є warnings/errors;
-* які наступні дії плануються.
-
-Не виводь великий дамп усієї памʼяті проєкту.
-
-## Failure handling / Поведінка при помилках
-
-Якщо `rmem-cli` недоступний:
-
-* повідом користувачу;
-* не переходь автоматично до хаотичного `rg`-пошуку по `//memory`;
-* використовуй прямий FS-доступ тільки якщо користувач дозволив або задача не може бути виконана інакше.
-
-Якщо `rmem check` повертає помилки:
-
-* не ігноруй їх;
-* коротко поясни користувачу;
-* не редагуй документи памʼяті, якщо помилки можуть призвести до втрати або пошкодження даних;
-* запропонуй або виконай безпечні команди виправлення, якщо вони доступні через `rmem-cli`.
-
-Якщо `rmem search` не знаходить потрібний контекст:
-
-* не вигадуй відсутні факти;
-* можна виконати ще один уточнений `rmem search`, але не перетворюй це на нескінченний ланцюжок запитів;
-* якщо контексту немає, чесно повідом користувачу.
-
-## Critical prohibitions / Критичні заборони
-
-Заборонено:
-
-* напряму редагувати `//memory` в обхід `rmem-cli`, якщо доступна відповідна CLI-команда;
-* використовувати `rg` як основний пошук по памʼяті замість `rmem search`;
-* змінювати generated notes як джерело істини;
-* мовчки виправляти invalid UTF-8;
-* створювати файли не в UTF-8;
-* ігнорувати `rmem check` після змін;
-* фізично видаляти документи памʼяті замість архівації, якщо користувач прямо не попросив;
-* вигадувати контекст проєкту, якщо памʼять недоступна.
-
-## Short agent checklist / Короткий чекліст агента
-
-Перед project-related роботою:
-
-```text
-1. Визначити спосіб запуску rmem-cli.
-2. Виконати rmem check.
-3. Виконати rmem search по суті задачі.
-4. Прочитати рекомендовані документи через rmem read, якщо потрібно.
-5. Виконати задачу.
-6. Якщо памʼять змінювалась — використовувати rmem edit/write/remove.
-7. Після змін виконати rmem check.
-8. Повідомити користувачу результат українською.
-```
-
-## Final rule
+## Final Rule
 
 Use `rmem-cli` as the controlled operating interface for project memory.
 
-Do not treat the memory directory as a pile of Markdown files.
-
-The whole point of this skill is to avoid making agents manually search, guess, patch, and eventually corrupt the project memory like tiny enthusiastic demolition workers.
+Do not treat `//memory` as a random Markdown dump.
