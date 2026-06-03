@@ -235,6 +235,7 @@ export type RegistryState = {
     documents: DocumentRegistryRecord[]
     places: StructuralPlace[]
     notes: MemoryNote[]
+    embeddings?: VectorIndexState
 }
 
 export type DocumentRegistryRecord = {
@@ -244,6 +245,23 @@ export type DocumentRegistryRecord = {
     contentHash: string
     archived: boolean
     updatedAt: string
+}
+
+export type VectorIndexState = {
+    schemaVersion: number
+    provider: string
+    model: string
+    dimensions: number
+    vectors: VectorIndexRecord[]
+    updatedAt: string
+}
+
+export type VectorIndexRecord = {
+    noteId: string
+    vector: EmbeddingVector
+    sourceHash: string
+    textHash: string
+    generatedAt: string
 }
 
 export type MemoryPathUnitReport = {

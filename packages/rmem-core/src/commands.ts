@@ -20,9 +20,10 @@ import { normalizeLineEndings, sha256 } from './hash.js'
 import { extractStructuralPlaces, validateMarkdown } from './markdown.js'
 import { hasManagedHeaderMismatch, replaceManagedHeader, stripManagedHeader } from './managed-header.js'
 import { atomicWriteUtf8, loadRegistry, readUtf8File, resolveMemoryPath, saveRegistry, toRegistryDocumentPath } from './storage.js'
-import { generateDerivedNotes, markNotesStale, validateGeneratedNote } from './notes.js'
+import { generateDerivedNotes, generateLlmDerivedNotes, markNotesStale, validateGeneratedNote } from './notes.js'
 import { memoryPathReport, searchRegistry } from './search.js'
-import { checkProviders } from './providers.js'
+import { buildVectorIndex, isVectorIndexFresh, MockEmbeddingProvider } from './embeddings.js'
+import { checkProviders, createEmbeddingProvider, createLlmProvider } from './providers.js'
 
 export async function listCommand(root: string, pathInput?: string): Promise<CommandResult<ListResponse>> {
     const config = await loadConfig(root)
@@ -458,17 +459,24 @@ export async function checkCommand(root: string): Promise<CommandResult<CheckRes
     }
 }
 
-export async function searchCommand(root: string, query: string): Promise<CommandResult<ReturnType<typeof searchRegistry>>> {
+export async function searchCommand(root: string, query: string): Promise<CommandResult<Awaited<ReturnType<typeof searchRegistry>>>> {
     const config = await loadConfig(root)
     if (isCommandError(config)) {
         return config
     }
 
     const registry = await loadRegistry(root)
-    return searchRegistry({ query, registry, config })
+    const queryEmbedding = await queryVectorBestEffort(config, query)
+    return searchRegistry({
+        query,
+        registry,
+        config,
+        queryVector: queryEmbedding.vector,
+        warnings: queryEmbedding.warnings
+    })
 }
 
-export async function devRebuildCommand(root: string): Promise<CommandResult<{ ok: true, rebuiltNotes: number }>> {
+export async function devRebuildCommand(root: string): Promise<CommandResult<{ ok: true, rebuiltNotes: number, embeddings: EmbeddingRebuildReport, warnings: RmemWarning[] }>> {
     const config = await loadConfig(root)
     if (isCommandError(config)) {
         return config
@@ -476,6 +484,7 @@ export async function devRebuildCommand(root: string): Promise<CommandResult<{ o
 
     const registry = await loadRegistry(root)
     let rebuiltNotes = 0
+    const warnings: RmemWarning[] = []
 
     for (const record of registry.documents.filter((item) => !item.archived)) {
         const fullPath = resolveMemoryPath(root, config.memoryRoot, record.path)
@@ -491,7 +500,8 @@ export async function devRebuildCommand(root: string): Promise<CommandResult<{ o
             body: parsed.body
         })
         const bodyByPlace = bodyByPlaceId(parsed.body, places)
-        const notes = generateDerivedNotes({
+        const noteBuild = await generateNotesBestEffort({
+            config,
             documentPath: record.path,
             frontmatter: parsed.frontmatter,
             places,
@@ -499,6 +509,8 @@ export async function devRebuildCommand(root: string): Promise<CommandResult<{ o
             existingNotes: registry.notes.filter((note) => note.source.documentId !== parsed.frontmatter.rmem.documentId),
             now: new Date().toISOString()
         })
+        warnings.push(...noteBuild.warnings)
+        const notes = noteBuild.notes
         rebuiltNotes += notes.length
         registry.notes = registry.notes.filter((note) => note.source.documentId !== parsed.frontmatter.rmem.documentId)
         registry.notes.push(...notes)
@@ -506,11 +518,14 @@ export async function devRebuildCommand(root: string): Promise<CommandResult<{ o
         registry.places.push(...places)
     }
 
+    const embeddingRebuild = await rebuildVectorIndexBestEffort(config, registry)
     await saveRegistry(root, registry)
 
     return {
         ok: true,
-        rebuiltNotes
+        rebuiltNotes,
+        embeddings: embeddingRebuild.report,
+        warnings: [...warnings, ...embeddingRebuild.warnings]
     }
 }
 
@@ -560,18 +575,21 @@ export async function devDocsParseCommand(root: string, documentPath: string): P
     }
 }
 
-export async function devEmbeddingsStatusCommand(root: string): Promise<CommandResult<{ ok: true, provider: string, indexedNotes: number, dimensions: number | null }>> {
+export async function devEmbeddingsStatusCommand(root: string): Promise<CommandResult<{ ok: true, provider: string, model: string, indexedNotes: number, dimensions: number | null, fresh: boolean }>> {
     const config = await loadConfig(root)
     if (isCommandError(config)) {
         return config
     }
 
     const registry = await loadRegistry(root)
+    const index = registry.embeddings
     return {
         ok: true,
-        provider: 'mock-deterministic-embedding',
-        indexedNotes: registry.notes.filter((note) => note.status === 'active').length,
-        dimensions: null
+        provider: index?.provider ?? 'none',
+        model: index?.model ?? 'none',
+        indexedNotes: index?.vectors.length ?? 0,
+        dimensions: index?.dimensions ?? null,
+        fresh: isVectorIndexFresh(index, registry.notes)
     }
 }
 
@@ -604,14 +622,21 @@ export async function devLinksValidateCommand(root: string): Promise<CommandResu
     }
 }
 
-export async function devSearchTraceCommand(root: string, query: string): Promise<CommandResult<{ ok: true, query: string, trace: unknown, report: ReturnType<typeof searchRegistry> }>> {
+export async function devSearchTraceCommand(root: string, query: string): Promise<CommandResult<{ ok: true, query: string, trace: unknown, report: Awaited<ReturnType<typeof searchRegistry>> }>> {
     const config = await loadConfig(root)
     if (isCommandError(config)) {
         return config
     }
 
     const registry = await loadRegistry(root)
-    const report = searchRegistry({ query, registry, config })
+    const queryEmbedding = await queryVectorBestEffort(config, query)
+    const report = await searchRegistry({
+        query,
+        registry,
+        config,
+        queryVector: queryEmbedding.vector,
+        warnings: queryEmbedding.warnings
+    })
 
     return {
         ok: true,
@@ -620,7 +645,16 @@ export async function devSearchTraceCommand(root: string, query: string): Promis
             documents: registry.documents.length,
             notes: registry.notes.length,
             activeNotes: registry.notes.filter((note) => note.status === 'active').length,
-            strategy: 'lexical-note-retrieval-with-document-context'
+            vectorIndex: registry.embeddings === undefined
+                ? undefined
+                : {
+                    provider: registry.embeddings.provider,
+                    model: registry.embeddings.model,
+                    dimensions: registry.embeddings.dimensions,
+                    vectors: registry.embeddings.vectors.length,
+                    fresh: isVectorIndexFresh(registry.embeddings, registry.notes)
+                },
+            strategy: 'lexical-plus-vector-note-retrieval-with-document-context'
         },
         report
     }
@@ -667,20 +701,26 @@ async function updateRegistryAfterWrite(
     })
 
     let rebuiltNotes = 0
+    const warnings: RmemWarning[] = []
     if (!options.staleOnly && config.indexing.noteRebuildMode === 'sync') {
         const bodyByPlace = bodyByPlaceId(body, places)
-        const notes = generateDerivedNotes({
+        const noteBuild = await generateNotesBestEffort({
+            config,
             documentPath,
             frontmatter,
             places,
             bodyByPlace,
             existingNotes: registry.notes.filter((note) => note.source.documentId !== frontmatter.rmem.documentId),
             now: new Date().toISOString()
-        }).filter(validateGeneratedNote)
+        })
+        warnings.push(...noteBuild.warnings)
+        const notes = noteBuild.notes.filter(validateGeneratedNote)
         registry.notes = registry.notes.filter((note) => note.source.documentId !== frontmatter.rmem.documentId)
         registry.notes.push(...notes)
         rebuiltNotes = notes.length
     }
+
+    const embeddingRebuild = await rebuildVectorIndexBestEffort(config, registry)
 
     await saveRegistry(root, registry)
 
@@ -695,7 +735,157 @@ async function updateRegistryAfterWrite(
             rebuiltNotes,
             structuralPlaces: places.length
         },
+        warnings: [...warnings, ...embeddingRebuild.warnings]
+    }
+}
+
+async function generateNotesBestEffort(input: {
+    config: RmemConfig
+    documentPath: string
+    frontmatter: Parameters<typeof reportFromFrontmatter>[1]
+    places: RegistryState['places']
+    bodyByPlace: Map<string, string>
+    existingNotes: RegistryState['notes']
+    now: string
+}): Promise<{ notes: RegistryState['notes'], warnings: RmemWarning[] }> {
+    const llm = createLlmProvider(input.config)
+    if (llm !== undefined) {
+        try {
+            return {
+                notes: await generateLlmDerivedNotes({
+                    documentPath: input.documentPath,
+                    frontmatter: input.frontmatter,
+                    places: input.places,
+                    bodyByPlace: input.bodyByPlace,
+                    existingNotes: input.existingNotes,
+                    now: input.now,
+                    llm: llm.provider,
+                    generator: `${llm.providerName}:${llm.model}`
+                }),
+                warnings: []
+            }
+        } catch (error) {
+            return {
+                notes: generateDerivedNotes({
+                    documentPath: input.documentPath,
+                    frontmatter: input.frontmatter,
+                    places: input.places,
+                    bodyByPlace: input.bodyByPlace,
+                    existingNotes: input.existingNotes,
+                    now: input.now
+                }),
+                warnings: [{
+                    code: 'LLM_PROVIDER_FAILED',
+                    message: 'Configured LLM provider failed; deterministic note compiler was used.',
+                    details: String(error)
+                }]
+            }
+        }
+    }
+
+    return {
+        notes: generateDerivedNotes({
+            documentPath: input.documentPath,
+            frontmatter: input.frontmatter,
+            places: input.places,
+            bodyByPlace: input.bodyByPlace,
+            existingNotes: input.existingNotes,
+            now: input.now
+        }),
         warnings: []
+    }
+}
+
+type EmbeddingRebuildReport = {
+    provider: string
+    model: string
+    indexedNotes: number
+    dimensions: number
+    fallbackUsed: boolean
+}
+
+async function rebuildVectorIndexBestEffort(config: RmemConfig, registry: RegistryState): Promise<{
+    report: EmbeddingRebuildReport
+    warnings: RmemWarning[]
+}> {
+    const now = new Date().toISOString()
+    const configured = createEmbeddingProvider(config)
+    const warnings: RmemWarning[] = []
+
+    try {
+        registry.embeddings = await buildVectorIndex({
+            notes: registry.notes,
+            provider: configured.provider,
+            providerName: configured.providerName,
+            model: configured.model,
+            now
+        })
+
+        return {
+            report: {
+                provider: registry.embeddings.provider,
+                model: registry.embeddings.model,
+                indexedNotes: registry.embeddings.vectors.length,
+                dimensions: registry.embeddings.dimensions,
+                fallbackUsed: false
+            },
+            warnings
+        }
+    } catch (error) {
+        warnings.push({
+            code: 'EMBEDDING_PROVIDER_FAILED',
+            message: 'Configured embedding provider failed; deterministic fallback index was built.',
+            details: String(error)
+        })
+    }
+
+    const fallbackProvider = new MockEmbeddingProvider()
+    registry.embeddings = await buildVectorIndex({
+        notes: registry.notes,
+        provider: fallbackProvider,
+        providerName: 'mock-deterministic-embedding',
+        model: 'deterministic-hash-v1',
+        now
+    })
+
+    return {
+        report: {
+            provider: registry.embeddings.provider,
+            model: registry.embeddings.model,
+            indexedNotes: registry.embeddings.vectors.length,
+            dimensions: registry.embeddings.dimensions,
+            fallbackUsed: true
+        },
+        warnings
+    }
+}
+
+async function queryVectorBestEffort(config: RmemConfig, query: string): Promise<{
+    vector: number[]
+    warnings: RmemWarning[]
+}> {
+    const configured = createEmbeddingProvider(config)
+    const warnings: RmemWarning[] = []
+
+    try {
+        const vectors = await configured.provider.embedTexts([query])
+        return {
+            vector: vectors[0] ?? [],
+            warnings
+        }
+    } catch (error) {
+        warnings.push({
+            code: 'EMBEDDING_PROVIDER_FAILED',
+            message: 'Configured embedding provider failed for query; deterministic fallback vector was used.',
+            details: String(error)
+        })
+    }
+
+    const fallbackProvider = new MockEmbeddingProvider()
+    const vectors = await fallbackProvider.embedTexts([query])
+    return {
+        vector: vectors[0] ?? [],
+        warnings
     }
 }
 

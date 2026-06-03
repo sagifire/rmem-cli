@@ -35,7 +35,7 @@ export async function atomicWriteUtf8(path: string, content: string): Promise<vo
 export async function loadRegistry(root: string): Promise<RegistryState> {
     const path = registryPath(root)
     try {
-        return JSON.parse(await readUtf8File(path)) as RegistryState
+        return normalizeRegistry(JSON.parse(await readUtf8File(path)) as Partial<RegistryState>)
     } catch (error) {
         if (isNodeError(error) && error.code === 'ENOENT') {
             return emptyRegistry()
@@ -43,6 +43,21 @@ export async function loadRegistry(root: string): Promise<RegistryState> {
 
         throw error
     }
+}
+
+function normalizeRegistry(registry: Partial<RegistryState>): RegistryState {
+    const result: RegistryState = {
+        schemaVersion: registry.schemaVersion ?? 1,
+        documents: registry.documents ?? [],
+        places: registry.places ?? [],
+        notes: registry.notes ?? []
+    }
+
+    if (registry.embeddings !== undefined) {
+        result.embeddings = registry.embeddings
+    }
+
+    return result
 }
 
 export async function saveRegistry(root: string, registry: RegistryState): Promise<void> {

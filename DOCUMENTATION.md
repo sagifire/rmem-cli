@@ -1,51 +1,36 @@
 # rmem-cli Documentation
 
-`rmem-cli` — це TypeScript CLI для документно-орієнтованої памʼяті проєкту.
+`rmem-cli` — це TypeScript CLI для документно-орієнтованої семантичної памʼяті проєкту.
 
-Документи Markdown є канонічним джерелом знань. Registry, structural places, notes, links, embeddings/search data і search reports є похідними проєкціями та мають перебудовуватися з документів.
-
-## Зміст
-
-- [Робоча модель](#робоча-модель)
-- [Конфігурація](#конфігурація)
-- [Структура сховища](#структура-сховища)
-- [Document contract](#document-contract)
-- [Public commands](#public-commands)
-- [Dev commands](#dev-commands)
-- [Provider setup](#provider-setup)
-- [Формати відповідей](#формати-відповідей)
-- [Error codes](#error-codes)
-- [Приклади workflows](#приклади-workflows)
+Канонічним джерелом знань є тільки Markdown-документи. Registry, structural places, notes, links, embeddings і search reports є похідними проєкціями та мають перебудовуватися з документів.
 
 ## Робоча модель
 
-`rmem-cli` завжди працює від поточної директорії процесу:
+Команди виконуються з кореня проєкту:
 
 ```bash
 cd /path/to/project
 rmem check
 ```
 
-Ця директорія вважається коренем памʼяті. У ній створюються:
+Після першого `write` створюються:
 
 ```text
 .rmem/
 memory/
 ```
 
-Усі agent-facing команди повертають structured JSON. Human-readable режим окремо не реалізований.
+Усі команди повертають structured JSON. Human-readable режим окремо не реалізований.
 
 ## Конфігурація
 
-Основний конфігураційний файл:
+Основний файл:
 
 ```text
 .rmem/config.yaml
 ```
 
-Файл створюється автоматично під час першої команди `write`, якщо його ще немає.
-
-Для сумісності підтримується fallback читання `.rmem/config.json`, але новий runtime config записується як `.rmem/config.yaml`.
+Якщо config відсутній, `rmem write` створює default config. Для сумісності підтримується fallback читання `.rmem/config.json`, але новий config записується як YAML.
 
 ### Default config
 
@@ -74,35 +59,29 @@ providers:
     model: BAAI/bge-m3
 ```
 
-### Поля config
+### `schemaVersion`
 
-#### `schemaVersion`
+Тип: `number`.
 
-Тип: `number`
+Версія схеми конфігурації. Поточне значення: `1`.
 
-Версія схеми конфігурації. Поточне значення:
+### `memoryRoot`
 
-```yaml
-schemaVersion: 1
-```
+Тип: `string`.
 
-#### `memoryRoot`
-
-Тип: `string`
-
-Директорія, де зберігаються canonical Markdown documents.
+Директорія canonical Markdown documents відносно кореня проєкту.
 
 ```yaml
 memoryRoot: memory
 ```
 
-Якщо `memoryRoot: memory`, документ `architecture/system.md` фізично зберігається тут:
+Документ `architecture/system.md` фізично зберігається як:
 
 ```text
 memory/architecture/system.md
 ```
 
-#### `areas`
+### `areas`
 
 Тип:
 
@@ -116,8 +95,6 @@ Record<string, {
 
 Описує semantic memory areas, які використовуються в `rmem.memoryPath` документів.
 
-Приклад:
-
 ```yaml
 areas:
   project:
@@ -128,46 +105,16 @@ areas:
     title: Architecture
     description: Архітектура, компоненти та системні рішення.
     parent: project
-
-  memory:
-    title: Memory
-    description: Памʼять, індексація, пошук і агентські протоколи.
-    parent: architecture
 ```
 
-Документ із таким frontmatter:
+### `indexing.noteRebuildMode`
 
-```yaml
-rmem:
-  memoryPath:
-    - project
-    - architecture
-    - memory
-```
+Тип: `'sync' | 'manual'`.
 
-буде повʼязаний із цими configured areas.
+- `sync` — після `write` або `edit` notes і vector index перебудовуються синхронно.
+- `manual` — documents оновлюються, а projections перебудовуються через `rmem dev notes rebuild` або `rmem dev index rebuild`.
 
-#### `indexing.noteRebuildMode`
-
-Тип:
-
-```ts
-'sync' | 'manual'
-```
-
-Режим оновлення derived notes після `write` або `edit`.
-
-```yaml
-indexing:
-  noteRebuildMode: sync
-```
-
-Підтримувані значення:
-
-- `sync` — notes перебудовуються під час document write/edit.
-- `manual` — documents оновлюються, а projections можна перебудувати через `rmem dev notes rebuild` або `rmem dev index rebuild`.
-
-#### `providers.llm`
+### `providers.llm`
 
 Тип:
 
@@ -180,7 +127,9 @@ indexing:
 }
 ```
 
-Default Windows-friendly config:
+LLM використовується як semantic compiler для derived notes. Він не є canonical source of truth. Якщо provider недоступний або повертає негрунтований JSON, CLI використовує deterministic note compiler і додає warning `LLM_PROVIDER_FAILED`.
+
+Ollama config:
 
 ```yaml
 providers:
@@ -190,7 +139,18 @@ providers:
     model: qwen2.5:7b
 ```
 
-#### `providers.embeddings`
+OpenAI-compatible local server config:
+
+```yaml
+providers:
+  llm:
+    type: openai-compatible
+    endpoint: http://localhost:8080/v1
+    model: local-model
+    apiKey: optional-token
+```
+
+### `providers.embeddings`
 
 Тип:
 
@@ -202,7 +162,7 @@ providers:
 }
 ```
 
-Default Windows-friendly config:
+Embedding provider будує persistent vector index у `.rmem/registry/state.json`. Якщо provider недоступний, CLI будує deterministic fallback index і додає warning `EMBEDDING_PROVIDER_FAILED`.
 
 ```yaml
 providers:
@@ -228,12 +188,13 @@ project-root/
 
 ### `.rmem/registry/state.json`
 
-Internal registry. Містить:
+Internal registry містить:
 
 - document records
 - structural places
 - derived notes
 - note links
+- vector index records
 - hashes
 - archive state
 
@@ -243,15 +204,15 @@ Internal registry. Містить:
 
 Містить archived snapshots після `rmem remove`.
 
-`remove` не видаляє canonical document із `memoryRoot`; він переводить документ у `status: archived` і також записує archived copy в `.rmem/archive/`.
+`remove` не видаляє canonical file фізично. Він переводить документ у `status: archived`, записує archived copy і позначає повʼязані notes як `archived`.
 
 ### `memory/`
 
-Canonical Markdown documents. Саме ці документи є джерелом знань.
+Canonical Markdown documents. Саме ці файли є джерелом знань.
 
 ## Document contract
 
-Кожен document має містити:
+Кожен документ має містити:
 
 1. YAML frontmatter
 2. managed header
@@ -319,7 +280,7 @@ type DocumentLanguage = 'uk' | 'en' | 'mixed'
 
 ### Managed header
 
-Managed header генерується CLI:
+Managed header генерується CLI з frontmatter:
 
 ```md
 <!-- rmem:managed-header start -->
@@ -331,11 +292,11 @@ Managed header генерується CLI:
 <!-- rmem:managed-header end -->
 ```
 
-Не редагуйте managed header вручну. Після `write`, `edit` і `remove` він регенерується з frontmatter.
+Не редагуйте managed header вручну. Після `write`, `edit` і `remove` він регенерується.
 
 ## Public commands
 
-Public commands — це стабільний agent-facing API.
+Public commands — стабільний agent-facing API:
 
 ```bash
 rmem search <query>
@@ -349,30 +310,27 @@ rmem check
 
 ### `rmem search <query>`
 
-Шукає релевантні derived notes і повертає one-shot context report.
+Повертає one-shot context report.
 
 ```bash
 rmem search "архітектура памʼяті"
 ```
 
-#### Аргументи
+Аргументи:
 
-- `<query>` — пошуковий запит. Усі аргументи після `search` обʼєднуються в один рядок.
+- `<query>` — пошуковий запит; усі аргументи після `search` обʼєднуються в один рядок.
 
-#### Опції
+Опції: немає.
 
-Немає.
+Поведінка:
 
-#### Поведінка
+- використовує lexical matching
+- використовує persistent vector index, якщо він fresh
+- використовує deterministic fallback vector, якщо provider/index недоступний
+- додає note links як graph context
+- повертає canonical document locations і recommended commands
 
-Команда використовує:
-
-- lexical matching
-- deterministic embedding similarity
-- simple score fusion
-- note links як graph context
-
-#### Відповідь
+Відповідь:
 
 ```ts
 type SearchResponse = {
@@ -385,44 +343,20 @@ type SearchResponse = {
 }
 ```
 
-Кожен result містить:
-
-- `rank`
-- `score`
-- `note`
-- `document`
-- `memoryPath`
-- `targetPlace`
-- `linkedKnowledge`
-- `recommendedCommands`
-
 ### `rmem list [memory-path]`
 
-Показує configured memory areas і documents у memory path.
+Показує configured memory areas і documents.
 
 ```bash
 rmem list
 rmem list project/architecture
 ```
 
-#### Аргументи
+Аргументи:
 
 - `[memory-path]` — optional path у форматі `project/architecture`.
 
-#### Опції
-
-Немає.
-
-#### Відповідь
-
-```ts
-type ListResponse = {
-    ok: true
-    path: string[]
-    area?: MemoryPathUnitReport
-    items: MemoryListItem[]
-}
-```
+Опції: немає.
 
 ### `rmem read <document-path>`
 
@@ -432,27 +366,11 @@ type ListResponse = {
 rmem read architecture/system.md
 ```
 
-#### Аргументи
+Аргументи:
 
 - `<document-path>` — шлях відносно `memoryRoot`.
 
-#### Опції
-
-Немає.
-
-#### Відповідь
-
-```ts
-type ReadDocumentResponse = {
-    ok: true
-    document: DocumentReport
-    content: string
-    documentHash: string
-    warnings: RmemWarning[]
-}
-```
-
-`documentHash` використовується для optimistic concurrency у `rmem edit`.
+Відповідь містить `documentHash`, який використовується для optimistic concurrency у `rmem edit`.
 
 ### `rmem write <document-path> [--from <file>]`
 
@@ -468,60 +386,26 @@ rmem write architecture/system.md --from ./system.md
 printf '# System\n\nBody\n' | rmem write architecture/system.md
 ```
 
-#### Аргументи
+Аргументи:
 
 - `<document-path>` — шлях відносно `memoryRoot`.
 
-#### Опції
+Опції:
 
-- `--from <file>` — прочитати content із UTF-8 файлу.
+- `--from <file>` — прочитати content з UTF-8 файлу.
 
-#### Вхід
+Поведінка:
 
-Якщо `--from` не передано, content читається зі stdin.
-
-Content має бути valid UTF-8.
-
-Якщо content не містить frontmatter, CLI створює default frontmatter:
-
-- `kind: overview`
-- `status: draft`
-- `memoryPath: ['project']`
-- `language: mixed`
-- `revision: 1`
-
-#### Поведінка
-
-Команда:
-
-1. читає content
+1. читає UTF-8 input
 2. нормалізує line endings
 3. створює або валідує frontmatter
 4. оновлює metadata
 5. генерує managed header
-6. перевіряє Markdown structure
+6. валідує Markdown
 7. атомарно записує document
 8. оновлює registry
 9. оновлює structural places
-10. перебудовує або позначає derived notes згідно `indexing.noteRebuildMode`
-
-#### Відповідь
-
-```ts
-type WriteDocumentResponse = {
-    ok: true
-    document: DocumentReport
-    created: boolean
-    changed: boolean
-    documentHash: string
-    affected: {
-        staleNotes: number
-        rebuiltNotes: number
-        structuralPlaces: number
-    }
-    warnings: RmemWarning[]
-}
-```
+10. у `sync` режимі перебудовує notes і vector index
 
 ### `rmem edit <document-path>`
 
@@ -531,17 +415,7 @@ type WriteDocumentResponse = {
 rmem edit architecture/system.md < edit-request.json
 ```
 
-#### Аргументи
-
-- `<document-path>` — шлях відносно `memoryRoot`.
-
-#### Опції
-
-Немає.
-
-#### Вхід
-
-JSON через stdin:
+Input JSON через stdin:
 
 ```json
 {
@@ -555,7 +429,7 @@ JSON через stdin:
 }
 ```
 
-#### Правила
+Правила:
 
 - `oldText` має збігтися рівно один раз.
 - Якщо збігів немає: `OLD_TEXT_NOT_FOUND`.
@@ -563,18 +437,6 @@ JSON через stdin:
 - Якщо `documentHash` не збігається: `DOCUMENT_HASH_MISMATCH`.
 - Якщо JSON невалідний: `INVALID_EDIT_REQUEST`.
 - Якщо результат має невалідний Markdown: `INVALID_MARKDOWN`.
-
-#### Рекомендований workflow
-
-```bash
-rmem read architecture/system.md
-```
-
-Взяти `documentHash` і exact text із `content`, потім:
-
-```bash
-rmem edit architecture/system.md < edit-request.json
-```
 
 ### `rmem remove <document-path>`
 
@@ -584,19 +446,9 @@ rmem edit architecture/system.md < edit-request.json
 rmem remove architecture/old-decision.md
 ```
 
-#### Аргументи
+Поведінка:
 
-- `<document-path>` — шлях відносно `memoryRoot`.
-
-#### Опції
-
-Немає.
-
-#### Поведінка
-
-Команда:
-
-1. читає поточний document
+1. читає current document
 2. змінює `rmem.status` на `archived`
 3. збільшує `revision`
 4. оновлює `updatedAt`
@@ -604,8 +456,6 @@ rmem remove architecture/old-decision.md
 6. записує archived copy у `.rmem/archive/<document-path>`
 7. оновлює canonical document у `memoryRoot`
 8. позначає повʼязані notes як `archived`
-
-Canonical file не видаляється фізично.
 
 ### `rmem check`
 
@@ -615,15 +465,7 @@ Canonical file не видаляється фізично.
 rmem check
 ```
 
-#### Аргументи
-
-Немає.
-
-#### Опції
-
-Немає.
-
-#### Перевіряє
+Перевіряє:
 
 - invalid UTF-8
 - invalid frontmatter
@@ -637,16 +479,6 @@ rmem check
 - note references to missing structural places
 - stale active notes
 - structural places referencing missing documents
-
-#### Відповідь
-
-```ts
-type CheckResponse = {
-    ok: true
-    valid: boolean
-    issues: RmemWarning[]
-}
-```
 
 ## Dev commands
 
@@ -662,11 +494,21 @@ rmem dev notes list
 
 ### `rmem dev notes rebuild`
 
-Перебудовує notes і structural places для всіх non-archived documents.
+Перебудовує notes, structural places і vector index для всіх non-archived documents.
 
 ```bash
 rmem dev notes rebuild
 ```
+
+Відповідь містить:
+
+- `rebuiltNotes`
+- `embeddings.provider`
+- `embeddings.model`
+- `embeddings.indexedNotes`
+- `embeddings.dimensions`
+- `embeddings.fallbackUsed`
+- `warnings`
 
 ### `rmem dev docs parse <document-path>`
 
@@ -684,7 +526,7 @@ Alias для rebuild derived index.
 rmem dev index rebuild
 ```
 
-Поточна реалізація виконує той самий rebuild, що й:
+Еквівалентно:
 
 ```bash
 rmem dev notes rebuild
@@ -692,7 +534,7 @@ rmem dev notes rebuild
 
 ### `rmem dev embeddings status`
 
-Показує статус deterministic embedding provider.
+Показує стан persistent vector index.
 
 ```bash
 rmem dev embeddings status
@@ -701,8 +543,10 @@ rmem dev embeddings status
 Відповідь містить:
 
 - `provider`
+- `model`
 - `indexedNotes`
 - `dimensions`
+- `fresh`
 
 ### `rmem dev links validate`
 
@@ -714,24 +558,26 @@ rmem dev links validate
 
 ### `rmem dev providers check`
 
-Перевіряє доступність configured LLM і embedding providers.
+Перевіряє доступність configured providers.
 
 ```bash
 rmem dev providers check
 ```
 
-Для default config команда перевіряє:
+Default config перевіряє:
 
 - Ollama API на `http://localhost:11434`
 - BGE-M3 server `/health` на `http://localhost:8765`
 
 ### `rmem dev search trace <query>`
 
-Повертає search report разом із діагностичним trace.
+Повертає search report і diagnostic trace.
 
 ```bash
 rmem dev search trace "memory indexing"
 ```
+
+Trace містить кількість documents/notes, active notes, vector index metadata і search strategy.
 
 ## Provider setup
 
@@ -743,7 +589,7 @@ rmem dev search trace "memory indexing"
 ollama pull qwen2.5:7b
 ```
 
-Якщо поточна shell-сесія ще не бачить `ollama` у `PATH`, використовуйте повний шлях:
+Якщо shell ще не бачить `ollama` у `PATH`:
 
 ```powershell
 & "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" pull qwen2.5:7b
@@ -769,7 +615,7 @@ tools/bge-m3-server
 .runtime/bge-m3-venv
 ```
 
-`.runtime/` виключено з git.
+`.runtime/` має бути виключено з Git.
 
 Install:
 
@@ -811,11 +657,11 @@ Check from rmem:
 rmem dev providers check
 ```
 
-## Формати відповідей
+## Response formats
 
 ### Success response
 
-Успішні команди повертають:
+Команди повертають JSON з `ok: true` і command-specific fields.
 
 ```json
 {
@@ -823,11 +669,9 @@ rmem dev providers check
 }
 ```
 
-Конкретні поля залежать від команди.
-
 ### Error response
 
-Помилки повертають:
+Помилки повертаються як structured command error:
 
 ```ts
 type RmemCommandError = {
@@ -870,15 +714,9 @@ type RmemErrorCode =
     | 'INVALID_EDIT_REQUEST'
 ```
 
-## Приклади workflows
+## Workflows
 
 ### Створити документ
-
-```bash
-cat ./architecture.md | rmem write architecture/system.md
-```
-
-або:
 
 ```bash
 rmem write architecture/system.md --from ./architecture.md
@@ -892,29 +730,8 @@ rmem search "system memory architecture"
 
 ### Безпечно відредагувати документ
 
-Прочитати документ:
-
 ```bash
 rmem read architecture/system.md
-```
-
-Створити `edit-request.json`:
-
-```json
-{
-    "documentHash": "<hash from rmem read>",
-    "edits": [
-        {
-            "oldText": "Old exact text",
-            "newText": "New exact text"
-        }
-    ]
-}
-```
-
-Застосувати:
-
-```bash
 rmem edit architecture/system.md < edit-request.json
 ```
 
@@ -924,7 +741,7 @@ rmem edit architecture/system.md < edit-request.json
 rmem check
 ```
 
-### Перебудувати derived notes вручну
+### Перебудувати projections вручну
 
 ```bash
 rmem dev notes rebuild
@@ -936,9 +753,9 @@ rmem dev notes rebuild
 rmem dev index rebuild
 ```
 
-## Обмеження поточної реалізації
+## Поточні обмеження
 
-- Ollama LLM provider і FlagEmbedding HTTP provider реалізовані та перевіряються через `rmem dev providers check`.
-- Search pipeline ще не повністю використовує real provider embeddings для persistent vector index.
 - Markdown validation перевіряє базову структуру: headings і fenced code blocks.
 - YAML parser підтримує контрактні структури config/frontmatter, але не є повною YAML бібліотекою.
+- LLM note compiler має grounding guard: негрунтований output відкидається на користь deterministic compiler.
+- Normal CI не має вимагати Ollama або BGE-M3; provider failures дають fallback warnings.

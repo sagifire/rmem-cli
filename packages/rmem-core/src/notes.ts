@@ -1,5 +1,43 @@
-import type { MemoryNote, RmemDocumentFrontmatter, StructuralPlace } from './types.js'
+import type { LocalLlmProvider, MemoryNote, NoteType, RmemDocumentFrontmatter, StructuralPlace } from './types.js'
 import { sha256 } from './hash.js'
+
+type NoteSegment = {
+    title: string
+    sourceQuote: string
+    sourceSummary: string
+    canonicalStatement: string
+    retrievalSeed: string
+    type?: NoteType
+    tags?: string[]
+    aliases?: string[]
+    entities?: string[]
+}
+
+type LlmNoteCompilerInput = {
+    document: {
+        title: string
+        summary?: string
+        kind: RmemDocumentFrontmatter['rmem']['kind']
+        tags: string[]
+        aliases: string[]
+    }
+    place: {
+        title: string
+        headingPath: string[]
+        content: string
+    }
+}
+
+type LlmNoteCompilerOutput = {
+    title?: unknown
+    sourceQuote?: unknown
+    sourceSummary?: unknown
+    canonicalStatement?: unknown
+    type?: unknown
+    tags?: unknown
+    aliases?: unknown
+    entities?: unknown
+}
 
 export function generateDerivedNotes(input: {
     documentPath: string
@@ -17,57 +55,48 @@ export function generateDerivedNotes(input: {
             continue
         }
 
-        const segment = synthesizeSegment(content, input.frontmatter, place)
-        const relatedNotes = findCandidateLinkedNotes(segment.retrievalSeed, input.existingNotes)
-        const retrievalText = [
-            segment.title,
-            input.frontmatter.title,
-            segment.sourceSummary,
-            segment.canonicalStatement,
-            segment.sourceQuote,
-            ...(input.frontmatter.tags ?? []),
-            ...(input.frontmatter.rmem.aliases ?? []),
-            ...input.frontmatter.rmem.memoryPath
-        ].join('\n')
+        notes.push(createNoteFromSegment({
+            documentPath: input.documentPath,
+            frontmatter: input.frontmatter,
+            place,
+            segment: synthesizeSegment(content, input.frontmatter, place),
+            existingNotes: input.existingNotes,
+            now: input.now,
+            generator: 'deterministic-semantic-compiler:v1'
+        }))
+    }
 
-        const note: MemoryNote = {
-            id: `note_${sha256(`${input.frontmatter.rmem.documentId}:${place.id}`).slice(0, 16)}`,
-            type: noteTypeForKind(input.frontmatter.rmem.kind),
-            status: 'active',
-            title: segment.title,
-            sourceSummary: segment.sourceSummary,
-            canonicalStatement: segment.canonicalStatement,
-            retrievalText,
-            tags: dedupe(input.frontmatter.tags ?? []),
-            aliases: dedupe(input.frontmatter.rmem.aliases ?? []),
-            entities: extractEntities(segment.sourceQuote),
-            source: {
-                documentId: input.frontmatter.rmem.documentId,
-                documentPath: input.documentPath,
-                structuralPlaceId: place.id,
-                headingPath: place.headingPath,
-                sourceQuote: segment.sourceQuote,
-                sourceHash: place.sourceHash
-            },
-            links: relatedNotes.map((note) => ({
-                targetNoteId: note.id,
-                type: 'related_to',
-                direction: 'outgoing',
-                reason: 'Deterministic lexical candidate linking found shared retrieval terms.',
-                confidence: 0.7
-            })),
-            generated: {
-                generator: 'deterministic-semantic-compiler:v1',
-                generatedAt: input.now,
-                sourceDocumentRevision: input.frontmatter.rmem.revision
-            }
+    return notes
+}
+
+export async function generateLlmDerivedNotes(input: {
+    documentPath: string
+    frontmatter: RmemDocumentFrontmatter
+    places: StructuralPlace[]
+    bodyByPlace: Map<string, string>
+    existingNotes: MemoryNote[]
+    now: string
+    llm: LocalLlmProvider
+    generator: string
+}): Promise<MemoryNote[]> {
+    const notes: MemoryNote[] = []
+
+    for (const place of input.places) {
+        const content = input.bodyByPlace.get(place.id)?.trim() ?? ''
+        if (content.length === 0) {
+            continue
         }
 
-        if (relatedNotes.length > 0) {
-            note.contextualizedSummary = `Related active notes: ${relatedNotes.map((relatedNote) => relatedNote.title).join(', ')}`
-        }
-
-        notes.push(note)
+        const segment = await compileLlmSegment(input.llm, input.frontmatter, place, content)
+        notes.push(createNoteFromSegment({
+            documentPath: input.documentPath,
+            frontmatter: input.frontmatter,
+            place,
+            segment,
+            existingNotes: input.existingNotes,
+            now: input.now,
+            generator: input.generator
+        }))
     }
 
     return notes
@@ -127,6 +156,157 @@ function synthesizeSegment(
     }
 }
 
+async function compileLlmSegment(
+    llm: LocalLlmProvider,
+    frontmatter: RmemDocumentFrontmatter,
+    place: StructuralPlace,
+    content: string
+): Promise<NoteSegment> {
+    const documentInput: LlmNoteCompilerInput['document'] = {
+        title: frontmatter.title,
+        kind: frontmatter.rmem.kind,
+        tags: frontmatter.tags ?? [],
+        aliases: frontmatter.rmem.aliases ?? []
+    }
+    if (frontmatter.summary !== undefined) {
+        documentInput.summary = frontmatter.summary
+    }
+
+    const output = await llm.generateJson<LlmNoteCompilerInput, LlmNoteCompilerOutput>({
+        name: 'rmem-note-compiler',
+        description: [
+            'You are a semantic compiler for document-oriented project memory.',
+            'Create one grounded memory note from the provided Markdown section.',
+            'Use only facts present in the source content.',
+            'sourceQuote must be an exact contiguous substring copied from content.',
+            'Return JSON object with title, sourceQuote, sourceSummary, canonicalStatement, type, tags, aliases, entities.'
+        ].join('\n')
+    }, {
+        document: documentInput,
+        place: {
+            title: place.title,
+            headingPath: place.headingPath,
+            content
+        }
+    })
+
+    return normalizeLlmSegment(output, content, frontmatter, place)
+}
+
+function normalizeLlmSegment(
+    output: LlmNoteCompilerOutput,
+    content: string,
+    frontmatter: RmemDocumentFrontmatter,
+    place: StructuralPlace
+): NoteSegment {
+    const fallback = synthesizeSegment(content, frontmatter, place)
+    const sourceQuote = stringValue(output.sourceQuote)
+    if (sourceQuote === undefined || !content.includes(sourceQuote)) {
+        return fallback
+    }
+
+    const canonicalStatement = stringValue(output.canonicalStatement)
+    if (canonicalStatement !== undefined && !sourceQuote.includes(canonicalStatement.replace(/…$/, '').slice(0, 40))) {
+        return fallback
+    }
+
+    const segment: NoteSegment = {
+        title: stringValue(output.title) ?? fallback.title,
+        sourceQuote,
+        sourceSummary: stringValue(output.sourceSummary) ?? fallback.sourceSummary,
+        canonicalStatement: canonicalStatement ?? fallback.canonicalStatement,
+        retrievalSeed: [
+            stringValue(output.title) ?? fallback.title,
+            stringValue(output.sourceSummary) ?? fallback.sourceSummary,
+            canonicalStatement ?? fallback.canonicalStatement,
+            sourceQuote
+        ].join('\n')
+    }
+
+    const type = noteTypeValue(output.type)
+    const tags = stringArray(output.tags)
+    const aliases = stringArray(output.aliases)
+    const entities = stringArray(output.entities)
+
+    if (type !== undefined) {
+        segment.type = type
+    }
+    if (tags !== undefined) {
+        segment.tags = tags
+    }
+    if (aliases !== undefined) {
+        segment.aliases = aliases
+    }
+    if (entities !== undefined) {
+        segment.entities = entities
+    }
+
+    return segment
+}
+
+function createNoteFromSegment(input: {
+    documentPath: string
+    frontmatter: RmemDocumentFrontmatter
+    place: StructuralPlace
+    segment: NoteSegment
+    existingNotes: MemoryNote[]
+    now: string
+    generator: string
+}): MemoryNote {
+    const relatedNotes = findCandidateLinkedNotes(input.segment.retrievalSeed, input.existingNotes)
+    const retrievalText = [
+        input.segment.title,
+        input.frontmatter.title,
+        input.segment.sourceSummary,
+        input.segment.canonicalStatement,
+        input.segment.sourceQuote,
+        ...(input.segment.tags ?? []),
+        ...(input.frontmatter.tags ?? []),
+        ...(input.segment.aliases ?? []),
+        ...(input.frontmatter.rmem.aliases ?? []),
+        ...input.frontmatter.rmem.memoryPath
+    ].join('\n')
+
+    const note: MemoryNote = {
+        id: `note_${sha256(`${input.frontmatter.rmem.documentId}:${input.place.id}`).slice(0, 16)}`,
+        type: input.segment.type ?? noteTypeForKind(input.frontmatter.rmem.kind),
+        status: 'active',
+        title: input.segment.title,
+        sourceSummary: input.segment.sourceSummary,
+        canonicalStatement: input.segment.canonicalStatement,
+        retrievalText,
+        tags: dedupe([...(input.frontmatter.tags ?? []), ...(input.segment.tags ?? [])]),
+        aliases: dedupe([...(input.frontmatter.rmem.aliases ?? []), ...(input.segment.aliases ?? [])]),
+        entities: dedupe([...(input.segment.entities ?? []), ...extractEntities(input.segment.sourceQuote)]),
+        source: {
+            documentId: input.frontmatter.rmem.documentId,
+            documentPath: input.documentPath,
+            structuralPlaceId: input.place.id,
+            headingPath: input.place.headingPath,
+            sourceQuote: input.segment.sourceQuote,
+            sourceHash: input.place.sourceHash
+        },
+        links: relatedNotes.map((note) => ({
+            targetNoteId: note.id,
+            type: 'related_to',
+            direction: 'outgoing',
+            reason: 'Deterministic lexical candidate linking found shared retrieval terms.',
+            confidence: 0.7
+        })),
+        generated: {
+            generator: input.generator,
+            generatedAt: input.now,
+            sourceDocumentRevision: input.frontmatter.rmem.revision
+        }
+    }
+
+    if (relatedNotes.length > 0) {
+        note.contextualizedSummary = `Related active notes: ${relatedNotes.map((relatedNote) => relatedNote.title).join(', ')}`
+    }
+
+    return note
+}
+
 function findCandidateLinkedNotes(text: string, notes: MemoryNote[]): MemoryNote[] {
     const terms = new Set(tokenize(text).filter((term) => term.length > 3))
     return notes
@@ -162,6 +342,40 @@ function noteTypeForKind(kind: RmemDocumentFrontmatter['rmem']['kind']): MemoryN
     }
 
     return 'concept'
+}
+
+function noteTypeValue(value: unknown): NoteType | undefined {
+    if (
+        value === 'concept'
+        || value === 'fact'
+        || value === 'rule'
+        || value === 'decision'
+        || value === 'warning'
+        || value === 'example'
+        || value === 'task'
+        || value === 'question'
+        || value === 'procedure'
+    ) {
+        return value
+    }
+
+    return undefined
+}
+
+function stringValue(value: unknown): string | undefined {
+    if (typeof value === 'string' && value.trim().length > 0) {
+        return value.trim()
+    }
+
+    return undefined
+}
+
+function stringArray(value: unknown): string[] | undefined {
+    if (!Array.isArray(value)) {
+        return undefined
+    }
+
+    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
 }
 
 function compact(value: string, maxChars: number): string {

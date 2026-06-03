@@ -1,20 +1,27 @@
 import type { MemoryPathUnitReport, RegistryState, RmemConfig, SearchResponse, SearchResult } from './types.js'
-import { cosineSimilarity, embedText } from './embeddings.js'
+import { MockEmbeddingProvider, cosineSimilarity, embedText, isVectorIndexFresh } from './embeddings.js'
 
-export function searchRegistry(input: {
+export async function searchRegistry(input: {
     query: string
     registry: RegistryState
     config: RmemConfig
-}): SearchResponse {
+    queryVector?: number[]
+    warnings?: SearchResponse['warnings']
+}): Promise<SearchResponse> {
     const terms = tokenize(input.query)
-    const queryEmbedding = embedText(input.query)
+    const fallbackQueryEmbedding = embedText(input.query)
+    const vectorByNote = new Map((input.registry.embeddings?.vectors ?? []).map((vector) => [vector.noteId, vector.vector]))
+    const hasFreshVectorIndex = isVectorIndexFresh(input.registry.embeddings, input.registry.notes)
     const scored = input.registry.notes
         .filter((note) => note.status !== 'archived')
         .map((note) => {
             const document = input.registry.documents.find((candidate) => candidate.document.documentId === note.source.documentId)
             const place = input.registry.places.find((candidate) => candidate.id === note.source.structuralPlaceId)
             const lexicalScore = scoreText(note.retrievalText, terms)
-            const denseScore = cosineSimilarity(queryEmbedding, embedText(note.retrievalText))
+            const indexedVector = vectorByNote.get(note.id)
+            const denseScore = input.queryVector !== undefined && indexedVector !== undefined
+                ? cosineSimilarity(input.queryVector, indexedVector)
+                : cosineSimilarity(fallbackQueryEmbedding, embedText(note.retrievalText))
             const graphBoost = note.links.length > 0 ? 0.1 : 0
             const score = lexicalScore + denseScore + graphBoost
             return { note, document, place, score }
@@ -105,10 +112,22 @@ export function searchRegistry(input: {
             path: result.document.path,
             reason: 'Relevant canonical document for this query.'
         })),
-        warnings: input.registry.notes.some((note) => note.status === 'stale')
-            ? [{ code: 'STALE_INDEX', message: 'Some notes are stale and search results may need rebuild.' }]
-            : []
+        warnings: [
+            ...(input.warnings ?? []),
+            ...input.registry.notes.some((note) => note.status === 'stale')
+                ? [{ code: 'STALE_INDEX', message: 'Some notes are stale and search results may need rebuild.' }]
+                : [],
+            ...hasFreshVectorIndex
+                ? []
+                : [{ code: 'STALE_INDEX', message: 'Vector index is missing or stale; deterministic fallback embeddings were used.' }]
+        ]
     }
+}
+
+export async function deterministicQueryVector(query: string): Promise<number[]> {
+    const provider = new MockEmbeddingProvider()
+    const vectors = await provider.embedTexts([query])
+    return vectors[0] ?? []
 }
 
 export function memoryPathReport(path: string[], config: RmemConfig): MemoryPathUnitReport[] {

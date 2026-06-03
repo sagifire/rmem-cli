@@ -8,6 +8,7 @@ import type {
     OpenAiCompatibleLlmProviderConfig,
     RmemConfig
 } from './types.js'
+import { MockEmbeddingProvider } from './embeddings.js'
 
 export type ProviderHealthReport = {
     ok: true
@@ -143,6 +144,50 @@ export class FlagEmbeddingHttpProvider implements EmbeddingProvider {
         }
 
         return payload.embeddings as EmbeddingVector[]
+    }
+}
+
+export function createEmbeddingProvider(config: RmemConfig): {
+    provider: EmbeddingProvider
+    providerName: string
+    model: string
+} {
+    if (config.providers?.embeddings !== undefined) {
+        return {
+            provider: new FlagEmbeddingHttpProvider(config.providers.embeddings),
+            providerName: config.providers.embeddings.type,
+            model: config.providers.embeddings.model
+        }
+    }
+
+    return {
+        provider: new MockEmbeddingProvider(),
+        providerName: 'mock-deterministic-embedding',
+        model: 'deterministic-hash-v1'
+    }
+}
+
+export function createLlmProvider(config: RmemConfig): {
+    provider: LocalLlmProvider
+    providerName: string
+    model: string
+} | undefined {
+    if (config.providers?.llm === undefined) {
+        return undefined
+    }
+
+    if (config.providers.llm.type === 'ollama') {
+        return {
+            provider: new OllamaLlmProvider(config.providers.llm),
+            providerName: config.providers.llm.type,
+            model: config.providers.llm.model
+        }
+    }
+
+    return {
+        provider: new OpenAiCompatibleLlmProvider(config.providers.llm),
+        providerName: config.providers.llm.type,
+        model: config.providers.llm.model
     }
 }
 

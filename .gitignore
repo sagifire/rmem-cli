@@ -9,6 +9,8 @@ memory/
 
 # Project-local runtimes, model caches and diagnostics
 .runtime/
+__pycache__/
+*.py[cod]
 *.log
 
 # Local environment files

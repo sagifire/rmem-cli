@@ -1,4 +1,5 @@
-import type { EmbeddingProvider, EmbeddingVector } from './types.js'
+import type { EmbeddingProvider, EmbeddingVector, MemoryNote, VectorIndexState } from './types.js'
+import { sha256 } from './hash.js'
 
 export class MockEmbeddingProvider implements EmbeddingProvider {
     async embedTexts(texts: string[]): Promise<EmbeddingVector[]> {
@@ -36,6 +37,54 @@ export function cosineSimilarity(left: EmbeddingVector, right: EmbeddingVector):
     }
 
     return score
+}
+
+export async function buildVectorIndex(input: {
+    notes: MemoryNote[]
+    provider: EmbeddingProvider
+    providerName: string
+    model: string
+    now: string
+}): Promise<VectorIndexState> {
+    const activeNotes = input.notes.filter((note) => note.status === 'active')
+    const vectors = await input.provider.embedTexts(activeNotes.map((note) => note.retrievalText))
+    const firstVector = vectors[0]
+
+    return {
+        schemaVersion: 1,
+        provider: input.providerName,
+        model: input.model,
+        dimensions: firstVector?.length ?? 0,
+        vectors: activeNotes.map((note, index) => ({
+            noteId: note.id,
+            vector: vectors[index] ?? [],
+            sourceHash: note.source.sourceHash,
+            textHash: sha256(note.retrievalText),
+            generatedAt: input.now
+        })),
+        updatedAt: input.now
+    }
+}
+
+export function isVectorIndexFresh(index: VectorIndexState | undefined, notes: MemoryNote[]): boolean {
+    if (index === undefined) {
+        return false
+    }
+
+    const activeNotes = notes.filter((note) => note.status === 'active')
+    if (index.vectors.length !== activeNotes.length) {
+        return false
+    }
+
+    const vectorByNote = new Map(index.vectors.map((vector) => [vector.noteId, vector]))
+    for (const note of activeNotes) {
+        const vector = vectorByNote.get(note.id)
+        if (vector === undefined || vector.sourceHash !== note.source.sourceHash || vector.textHash !== sha256(note.retrievalText)) {
+            return false
+        }
+    }
+
+    return true
 }
 
 function tokenize(value: string): string[] {

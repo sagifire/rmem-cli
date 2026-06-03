@@ -168,7 +168,7 @@ test('derived notes create related links and link validation passes', async () =
     try {
         await writeCommand(root, 'a.md', '# Shared Architecture\n\nVector index stores project memory retrieval data.\n')
         await writeCommand(root, 'b.md', '# Related Architecture\n\nVector index stores related project memory signals.\n')
-        const search = await searchCommand(root, 'related retrieval signals')
+        const search = await searchCommand(root, 'джерелом істини')
         assert.equal(search.ok, true)
         assert.equal(search.results.length > 0, true)
         assert.equal(search.results.some((result) => result.linkedKnowledge.length > 0), true)
