@@ -27,6 +27,8 @@
 
 Помилка `E422 Error verifying sigstore provenance bundle` з повідомленням про `repository.url` означає, що npm package metadata не збігається з GitHub repository, з якого запускається workflow.
 
+Помилка `E403 You cannot publish over the previously published versions` означає, що version уже існує в npm. Release workflow перевіряє `npm view` перед publish і пропускає вже опубліковані package versions, щоб повторний запуск після partial publish міг завершити решту packages.
+
 ## Required validation
 
 ```bash
@@ -66,6 +68,8 @@ npm publish --workspace rmem-cli --dry-run --access public
 ```
 
 Порядок важливий: `@rmem/core` публікується перед `rmem-cli`, бо CLI залежить від core.
+
+Перед publish workflow перевіряє, чи існують поточні versions у npm. Якщо package version уже опублікована, відповідний publish step пропускається.
 
 ## Publish with provenance
 

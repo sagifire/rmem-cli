@@ -43,14 +43,36 @@ jobs:
           npm publish --workspace @rmem/core --dry-run --access public
           npm publish --workspace rmem-cli --dry-run --access public
 
-      - name: Publish @rmem/core
+      - name: Check npm package versions
         if: ${{ github.event.inputs.publish == 'true' }}
+        id: published
+        shell: bash
+        run: |
+          core_version="$(node -p "require('./packages/rmem-core/package.json').version")"
+          cli_version="$(node -p "require('./packages/rmem-cli/package.json').version")"
+
+          if npm view "@rmem/core@${core_version}" version >/dev/null 2>&1; then
+            echo "core_exists=true" >> "$GITHUB_OUTPUT"
+            echo "@rmem/core@${core_version} already exists on npm; skipping publish."
+          else
+            echo "core_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if npm view "rmem-cli@${cli_version}" version >/dev/null 2>&1; then
+            echo "cli_exists=true" >> "$GITHUB_OUTPUT"
+            echo "rmem-cli@${cli_version} already exists on npm; skipping publish."
+          else
+            echo "cli_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish @rmem/core
+        if: ${{ github.event.inputs.publish == 'true' && steps.published.outputs.core_exists == 'false' }}
         run: npm publish --workspace @rmem/core --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish rmem-cli
-        if: ${{ github.event.inputs.publish == 'true' }}
+        if: ${{ github.event.inputs.publish == 'true' && steps.published.outputs.cli_exists == 'false' }}
         run: npm publish --workspace rmem-cli --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
