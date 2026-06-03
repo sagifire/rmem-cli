@@ -39,13 +39,15 @@ if (!existsSync(rmemCli)) {
 }
 
 const version = runJson(process.execPath, [rmemCli, '--version'], appRoot)
-if (version.ok !== true || version.version !== '1.0.0') {
+if (version.ok !== true || version.version !== '1.1.0') {
     throw new Error(`Unexpected rmem --version output: ${JSON.stringify(version)}`)
 }
 
 const docPath = join(appRoot, 'doc.md')
 const configPath = join(appRoot, '.rmem', 'config.yaml')
+const treeIndexPath = join(appRoot, 'memory', 'tree-index.md')
 mkdirSync(dirname(configPath), { recursive: true })
+mkdirSync(dirname(treeIndexPath), { recursive: true })
 writeFileSync(configPath, [
     'schemaVersion: 1',
     '',
@@ -58,6 +60,16 @@ writeFileSync(configPath, [
     '',
     'indexing:',
     '  noteRebuildMode: sync',
+    ''
+].join('\n'), 'utf8')
+writeFileSync(treeIndexPath, [
+    '# Memory Tree Index',
+    '',
+    '<!-- rmem:tree-index start -->',
+    '',
+    '- `project` — Offline package smoke memory.',
+    '',
+    '<!-- rmem:tree-index end -->',
     ''
 ].join('\n'), 'utf8')
 writeFileSync(docPath, '# Package Smoke\n\nInstalled package writes canonical memory.\n', 'utf8')

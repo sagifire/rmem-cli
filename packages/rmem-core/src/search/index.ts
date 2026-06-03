@@ -137,10 +137,11 @@ export async function deterministicQueryVector(query: string): Promise<number[]>
 }
 
 export function memoryPathReport(path: string[], config: RmemConfig): MemoryPathUnitReport[] {
-    return path.map((key) => {
+    return path.map((unit, index) => {
+        const key = path.slice(0, index + 1).join('/')
         const area = config.areas[key]
         if (area === undefined) {
-            return { key, title: key }
+            return { key, title: unit }
         }
 
         const result: MemoryPathUnitReport = {

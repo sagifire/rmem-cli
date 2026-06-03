@@ -94,4 +94,20 @@ async function writeOfflineConfig(root: string): Promise<void> {
         '  noteRebuildMode: sync',
         ''
     ].join('\n'), 'utf8')
+    await writeFile(join(root, 'memory', 'tree-index.md'), treeIndex([
+        ['project', 'Offline fixture memory.']
+    ]), 'utf8')
+}
+
+function treeIndex(entries: [string, string][]): string {
+    return [
+        '# Memory Tree Index',
+        '',
+        '<!-- rmem:tree-index start -->',
+        '',
+        ...entries.map(([path, description]) => `${'  '.repeat(path.split('/').length - 1)}- \`${path}\` — ${description}`),
+        '',
+        '<!-- rmem:tree-index end -->',
+        ''
+    ].join('\n')
 }

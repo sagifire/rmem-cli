@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import {
     checkCommand,
+    createFolderCommand,
     devDocsParseCommand,
     devEmbeddingsStatusCommand,
     devLinksValidateCommand,
@@ -13,11 +14,16 @@ import {
     devRebuildCommand,
     devSearchTraceCommand,
     editCommand,
+    moveFolderCommand,
     isCommandError,
     listCommand,
     readCommand,
     removeCommand,
+    removeFolderCommand,
     searchCommand,
+    treeGenerateCommand,
+    treeRepairCommand,
+    updateFolderCommand,
     writeCommand
 } from '@rmem/core'
 
@@ -46,6 +52,12 @@ async function main(): Promise<void> {
                 'write <document-path> [--from <file>]',
                 'edit <document-path>',
                 'remove <document-path>',
+                'folder create <memory-path> --description <text> [--title <text>]',
+                'folder update <memory-path> --description <text> [--title <text>]',
+                'folder move <from-memory-path> <to-memory-path> [--description <text>] [--title <text>]',
+                'folder remove <memory-path> [--delete-files]',
+                'tree generate',
+                'tree repair',
                 'check',
                 'dev notes list',
                 'dev notes rebuild',
@@ -98,6 +110,38 @@ async function main(): Promise<void> {
 
     if (command === 'remove') {
         await output(await removeCommand(root, requiredArg(args[1], 'document-path')))
+        return
+    }
+
+    if (command === 'folder' && args[1] === 'create') {
+        await output(await createFolderCommand(root, requiredArg(args[2], 'memory-path'), folderWriteRequest(args)))
+        return
+    }
+
+    if (command === 'folder' && args[1] === 'update') {
+        await output(await updateFolderCommand(root, requiredArg(args[2], 'memory-path'), folderWriteRequest(args)))
+        return
+    }
+
+    if (command === 'folder' && args[1] === 'move') {
+        await output(await moveFolderCommand(root, requiredArg(args[2], 'from-memory-path'), requiredArg(args[3], 'to-memory-path'), folderMoveRequest(args)))
+        return
+    }
+
+    if (command === 'folder' && args[1] === 'remove') {
+        await output(await removeFolderCommand(root, requiredArg(args[2], 'memory-path'), {
+            deleteFiles: args.includes('--delete-files')
+        }))
+        return
+    }
+
+    if (command === 'tree' && args[1] === 'generate') {
+        await output(await treeGenerateCommand(root))
+        return
+    }
+
+    if (command === 'tree' && args[1] === 'repair') {
+        await output(await treeRepairCommand(root))
         return
     }
 
@@ -172,6 +216,50 @@ function requiredArg(value: string | undefined, name: string): string {
     }
 
     return value
+}
+
+function requiredOption(args: string[], name: string): string {
+    const value = optionalOption(args, name)
+    if (value === undefined) {
+        throw new Error(`Missing required ${name}.`)
+    }
+
+    return value
+}
+
+function optionalOption(args: string[], name: string): string | undefined {
+    const index = args.indexOf(name)
+    if (index === -1) {
+        return undefined
+    }
+
+    return requiredArg(args[index + 1], name)
+}
+
+function folderWriteRequest(args: string[]): { title?: string, description: string } {
+    const request: { title?: string, description: string } = {
+        description: requiredOption(args, '--description')
+    }
+    const title = optionalOption(args, '--title')
+    if (title !== undefined) {
+        request.title = title
+    }
+
+    return request
+}
+
+function folderMoveRequest(args: string[]): { title?: string, description?: string } {
+    const request: { title?: string, description?: string } = {}
+    const title = optionalOption(args, '--title')
+    if (title !== undefined) {
+        request.title = title
+    }
+    const description = optionalOption(args, '--description')
+    if (description !== undefined) {
+        request.description = description
+    }
+
+    return request
 }
 
 async function readStdin(): Promise<string> {

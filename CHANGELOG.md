@@ -4,6 +4,17 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), а versioning має відповідати правилам із `docs/RELEASE.md`.
 
+## [1.1.0] - 2026-06-03
+
+### Added
+
+- Додано agent-facing folder commands: `folder create`, `folder update`, `folder move`, `folder remove`.
+- Додано tree commands: `tree generate` і `tree repair`.
+- Додано canonical `memory/tree-index.md` для опису структури папок бази знань.
+- Додано derived backup/cache `.rmem/index/tree-index.json`.
+- Додано full path folder keys, що дозволяє однакові назви папок у різних гілках.
+- `rmem write` тепер повертає `MEMORY_FOLDER_NOT_FOUND`, якщо document path вказує на незареєстровану папку.
+
 ## [1.0.0] - 2026-06-03
 
 ### Added

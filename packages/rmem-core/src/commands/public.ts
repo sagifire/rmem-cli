@@ -1,16 +1,23 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rename, rm } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import type {
     CheckResponse,
     CommandResult,
     EditDocumentRequest,
+    FolderMoveRequest,
+    FolderRemoveRequest,
+    FolderResponse,
+    FolderWriteRequest,
     ListResponse,
     ReadDocumentResponse,
+    RmemConfig,
     RmemWarning,
+    TreeGenerateResponse,
+    TreeRepairResponse,
     WriteDocumentResponse
 } from '../types.js'
 import { commandError, isCommandError } from '../errors.js'
-import { ensureConfig, loadConfig } from '../config.js'
+import { ensureBaseConfig, ensureConfig, loadBaseConfig, loadConfig } from '../config.js'
 import { createDefaultFrontmatter, parseDocumentMarkdown, serializeDocument } from '../frontmatter.js'
 import { documentIdFromPath } from '../ids.js'
 import { normalizeLineEndings } from '../hash.js'
@@ -19,6 +26,22 @@ import { hasManagedHeaderMismatch, replaceManagedHeader } from '../managed-heade
 import { atomicWriteUtf8, loadRegistry, readUtf8File, resolveMemoryPath, saveRegistry, toRegistryDocumentPath } from '../storage.js'
 import { isVectorIndexCompatible, isVectorIndexFresh } from '../embeddings.js'
 import { searchRegistry } from '../search.js'
+import {
+    areaDirectoryFromPath,
+    areaKeyFromPath,
+    areaReport,
+    areasFromTree,
+    generateTreeIndexFromFilesystem,
+    loadTreeIndex,
+    loadTreeIndexBackup,
+    makeArea,
+    normalizeAreaPath,
+    parentKeyFromPath,
+    saveTreeIndex,
+    saveTreeIndexBackup,
+    validateAreaPath,
+    treeIndexPath
+} from '../areas.js'
 import {
     countOccurrences,
     firstParagraph,
@@ -40,7 +63,7 @@ export async function listCommand(root: string, pathInput?: string): Promise<Com
 
     const registry = await loadRegistry(root)
     const path = pathInput === undefined || pathInput.length === 0 ? [] : pathInput.split('/').filter(Boolean)
-    const areaKey = path[path.length - 1]
+    const areaKey = path.length === 0 ? undefined : areaKeyFromPath(path)
     const items: ListResponse['items'] = []
 
     for (const [key, area] of Object.entries(config.areas)) {
@@ -79,6 +102,8 @@ export async function listCommand(root: string, pathInput?: string): Promise<Com
         if (area !== undefined) {
             const areaReport = {
                 key: areaKey,
+                path,
+                treeIndexPath: toRegistryDocumentPath(relative(root, treeIndexPath(root, config.memoryRoot))),
                 title: area.title
             }
             if (area.description !== undefined) {
@@ -137,7 +162,16 @@ export async function readCommand(root: string, documentPath: string): Promise<C
 }
 
 export async function writeCommand(root: string, documentPath: string, contentInput: string): Promise<CommandResult<WriteDocumentResponse>> {
-    const config = await ensureConfig(root)
+    const config = await loadConfig(root)
+    if (isCommandError(config)) {
+        return config
+    }
+
+    const folderError = validateDocumentFolder(config, documentPath)
+    if (folderError !== undefined) {
+        return folderError
+    }
+
     const fullPath = resolveMemoryPath(root, config.memoryRoot, documentPath)
     const registryPath = toRegistryDocumentPath(documentPath)
     const now = new Date().toISOString()
@@ -152,7 +186,8 @@ export async function writeCommand(root: string, documentPath: string, contentIn
             documentPath,
             title,
             documentId: documentIdFromPath(registryPath),
-            now
+            now,
+            memoryPath: documentMemoryPathFromPath(documentPath)
         }
         const summary = firstParagraph(content)
         if (summary !== undefined) {
@@ -209,6 +244,502 @@ export async function writeCommand(root: string, documentPath: string, contentIn
             suggestion: 'Check file permissions and available disk space.'
         })
     }
+}
+
+export async function treeGenerateCommand(root: string): Promise<CommandResult<TreeGenerateResponse>> {
+    const config = await ensureBaseConfig(root)
+    const existing = await loadTreeIndex(root, config.memoryRoot)
+    if (!isCommandError(existing)) {
+        return commandError({
+            code: 'MEMORY_FOLDER_ALREADY_EXISTS',
+            message: 'memory/tree-index.md already exists.',
+            suggestion: 'Edit memory/tree-index.md directly or use folder commands.'
+        })
+    }
+
+    const tree = await generateTreeIndexFromFilesystem(root, config.memoryRoot)
+    return {
+        ok: true,
+        created: true,
+        treeIndexPath: tree.treeIndexPath,
+        folders: tree.folders.map((record) => areaReport(root, config.memoryRoot, record.path, record.area)),
+        warnings: [
+            {
+                code: 'MEMORY_FOLDER_DESCRIPTION_EMPTY',
+                message: 'Generated tree-index.md contains empty folder descriptions.',
+                details: { count: tree.folders.length }
+            }
+        ]
+    }
+}
+
+export async function treeRepairCommand(root: string): Promise<CommandResult<TreeRepairResponse>> {
+    const config = await ensureBaseConfig(root)
+    const backup = await loadTreeIndexBackup(root)
+    if (isCommandError(backup)) {
+        return backup
+    }
+
+    const tree = await saveTreeIndex(root, config.memoryRoot, backup.folders)
+    return {
+        ok: true,
+        repaired: true,
+        treeIndexPath: tree.treeIndexPath,
+        folders: tree.folders.map((record) => areaReport(root, config.memoryRoot, record.path, record.area)),
+        warnings: []
+    }
+}
+
+export async function createFolderCommand(root: string, pathInput: string, request: FolderWriteRequest): Promise<CommandResult<FolderResponse>> {
+    const config = await loadConfig(root)
+    if (isCommandError(config)) {
+        return config
+    }
+
+    const tree = await loadTreeIndex(root, config.memoryRoot)
+    if (isCommandError(tree)) {
+        return tree
+    }
+
+    const path = normalizeAreaPath(pathInput)
+    const pathError = validateAreaPath(path)
+    if (pathError !== undefined) {
+        return commandError({
+            code: 'INVALID_MEMORY_PATH',
+            message: pathError,
+            suggestion: 'Use a memory folder path such as project/architecture.'
+        })
+    }
+
+    const key = areaKeyFromPath(path)
+    if (config.areas[key] !== undefined) {
+        return commandError({
+            code: 'MEMORY_FOLDER_ALREADY_EXISTS',
+            message: 'Memory folder already exists.',
+            details: { path },
+            suggestion: 'Use rmem folder update to change its description.'
+        })
+    }
+
+    const parent = parentKeyFromPath(path)
+    if (parent !== undefined && config.areas[parent] === undefined) {
+        return commandError({
+            code: 'MEMORY_FOLDER_NOT_FOUND',
+            message: 'Parent memory folder does not exist.',
+            details: { path, parent },
+            suggestion: `Create parent folder first: rmem folder create ${path.slice(0, -1).join('/')} --description "..."`
+        })
+    }
+
+    const area = makeArea(path, request.description, request.title)
+    tree.folders.push({ path, key, area })
+    const updatedTree = await saveTreeIndex(root, config.memoryRoot, tree.folders)
+    const folder = areaReport(root, config.memoryRoot, path, area)
+    await saveTreeIndexBackup(root, updatedTree)
+
+    return emptyFolderResponse(folder, {
+        created: true,
+        changed: true
+    })
+}
+
+export async function updateFolderCommand(root: string, pathInput: string, request: FolderWriteRequest): Promise<CommandResult<FolderResponse>> {
+    const config = await loadConfig(root)
+    if (isCommandError(config)) {
+        return config
+    }
+    const tree = await loadTreeIndex(root, config.memoryRoot)
+    if (isCommandError(tree)) {
+        return tree
+    }
+
+    const path = normalizeAreaPath(pathInput)
+    const area = readAreaByPath(config, path)
+    if (isCommandError(area)) {
+        return area
+    }
+
+    const updated = makeArea(path, request.description, request.title ?? area.title)
+    const key = areaKeyFromPath(path)
+    tree.folders = tree.folders.map((record) => record.key === key ? { path, key, area: updated } : record)
+    const updatedTree = await saveTreeIndex(root, config.memoryRoot, tree.folders)
+    const folder = areaReport(root, config.memoryRoot, path, updated)
+    await saveTreeIndexBackup(root, updatedTree)
+
+    return emptyFolderResponse(folder, {
+        changed: true
+    })
+}
+
+export async function moveFolderCommand(root: string, fromInput: string, toInput: string, request: FolderMoveRequest = {}): Promise<CommandResult<FolderResponse>> {
+    const config = await loadConfig(root)
+    if (isCommandError(config)) {
+        return config
+    }
+    const tree = await loadTreeIndex(root, config.memoryRoot)
+    if (isCommandError(tree)) {
+        return tree
+    }
+
+    const fromPath = normalizeAreaPath(fromInput)
+    const toPath = normalizeAreaPath(toInput)
+    const source = readAreaByPath(config, fromPath)
+    if (isCommandError(source)) {
+        return source
+    }
+
+    const pathError = validateAreaPath(toPath)
+    if (pathError !== undefined) {
+        return commandError({
+            code: 'INVALID_MEMORY_PATH',
+            message: pathError,
+            suggestion: 'Use a memory folder path such as project/architecture.'
+        })
+    }
+
+    const fromKey = areaKeyFromPath(fromPath)
+    const toKey = areaKeyFromPath(toPath)
+    if (fromKey !== toKey && config.areas[toKey] !== undefined) {
+        return commandError({
+            code: 'MEMORY_FOLDER_ALREADY_EXISTS',
+            message: 'Target memory folder already exists.',
+            details: { from: fromPath, to: toPath }
+        })
+    }
+
+    const toParent = parentKeyFromPath(toPath)
+    if (toParent !== undefined && toParent !== fromKey && config.areas[toParent] === undefined) {
+        return commandError({
+            code: 'MEMORY_FOLDER_NOT_FOUND',
+            message: 'Target parent memory folder does not exist.',
+            details: { to: toPath, parent: toParent }
+        })
+    }
+
+    const fromDirectory = areaDirectoryFromPath(root, config.memoryRoot, fromPath)
+    const toDirectory = areaDirectoryFromPath(root, config.memoryRoot, toPath)
+    if (fromDirectory !== toDirectory) {
+        await rename(fromDirectory, toDirectory)
+    }
+
+    const movedArea = makeArea(toPath, request.description ?? source.description ?? '', request.title ?? source.title)
+    const movedRecords = tree.folders.map((record) => {
+        if (!memoryPathStartsWith(record.path, fromPath)) {
+            return record
+        }
+
+        const suffix = record.path.slice(fromPath.length)
+        const nextPath = [...toPath, ...suffix]
+        const nextKey = areaKeyFromPath(nextPath)
+        const nextArea = record.key === fromKey
+            ? movedArea
+            : makeArea(nextPath, record.area.description ?? '', record.area.title)
+        return {
+            path: nextPath,
+            key: nextKey,
+            area: nextArea
+        }
+    })
+    await saveTreeIndex(root, config.memoryRoot, movedRecords)
+    const folder = areaReport(root, config.memoryRoot, toPath, movedArea)
+
+    const movedConfig: RmemConfig = {
+        ...config,
+        areas: areasFromTree({
+            schemaVersion: 1,
+            treeIndexPath: tree.treeIndexPath,
+            folders: movedRecords
+        })
+    }
+    const affected = await rewriteDocumentsForMovedFolder(root, movedConfig, fromPath, toPath)
+    return {
+        ok: true,
+        folder,
+        changed: true,
+        moved: true,
+        affected,
+        warnings: []
+    }
+}
+
+export async function removeFolderCommand(root: string, pathInput: string, request: FolderRemoveRequest = {}): Promise<CommandResult<FolderResponse>> {
+    const config = await loadConfig(root)
+    if (isCommandError(config)) {
+        return config
+    }
+    const tree = await loadTreeIndex(root, config.memoryRoot)
+    if (isCommandError(tree)) {
+        return tree
+    }
+
+    const path = normalizeAreaPath(pathInput)
+    const area = readAreaByPath(config, path)
+    if (isCommandError(area)) {
+        return area
+    }
+
+    if (path.length === 1 && areaKeyFromPath(path) === 'project') {
+        return commandError({
+            code: 'MEMORY_FOLDER_PROTECTED',
+            message: 'The root project memory folder cannot be removed.',
+            suggestion: 'Remove child folders instead.'
+        })
+    }
+
+    const directory = areaDirectoryFromPath(root, config.memoryRoot, path)
+    if (request.deleteFiles === true) {
+        await rm(directory, { recursive: true, force: true })
+    }
+
+    const remaining = tree.folders.filter((record) => !memoryPathStartsWith(record.path, path))
+    await saveTreeIndex(root, config.memoryRoot, remaining)
+    const affected = request.deleteFiles === true
+        ? await cleanupRegistryForRemovedFolder(root, path)
+        : await archiveRegistryForRemovedFolder(root, config, path)
+
+    return {
+        ok: true,
+        folder: areaReport(root, config.memoryRoot, path, area),
+        changed: true,
+        removed: true,
+        affected,
+        warnings: []
+    }
+}
+
+function validateDocumentFolder(config: RmemConfig, documentPath: string): ReturnType<typeof commandError> | undefined {
+    const folderUnits = toRegistryDocumentPath(dirname(documentPath))
+        .split('/')
+        .filter((unit) => unit.length > 0 && unit !== '.')
+    if (folderUnits.length === 0) {
+        return undefined
+    }
+
+    const memoryPath = ['project', ...folderUnits]
+    const key = areaKeyFromPath(memoryPath)
+    if (config.areas[key] !== undefined) {
+        return undefined
+    }
+
+    return commandError({
+        code: 'MEMORY_FOLDER_NOT_FOUND',
+        message: 'Document target folder is not defined in memory/tree-index.md.',
+        details: { documentPath, memoryPath: key },
+        suggestion: `Create the folder first: rmem folder create project/${folderUnits.join('/')} --description "..."`
+    })
+}
+
+function documentMemoryPathFromPath(documentPath: string): string[] {
+    const folderUnits = toRegistryDocumentPath(dirname(documentPath))
+        .split('/')
+        .filter((unit) => unit.length > 0 && unit !== '.')
+
+    return folderUnits.length === 0 ? ['project'] : ['project', ...folderUnits]
+}
+
+function readAreaByPath(config: RmemConfig, path: string[]): CommandResult<RmemConfig['areas'][string]> {
+    const pathError = validateAreaPath(path)
+    if (pathError !== undefined) {
+        return commandError({
+            code: 'INVALID_MEMORY_PATH',
+            message: pathError,
+            suggestion: 'Use a memory folder path such as project/architecture.'
+        })
+    }
+
+    const area = config.areas[areaKeyFromPath(path)]
+    if (area === undefined) {
+        return commandError({
+            code: 'MEMORY_FOLDER_NOT_FOUND',
+            message: 'Memory folder does not exist.',
+            details: { path },
+            suggestion: `Create it first: rmem folder create ${path.join('/')} --description "..."`
+        })
+    }
+
+    return area
+}
+
+function emptyFolderResponse(folder: FolderResponse['folder'], flags: { created?: boolean, changed?: boolean }): FolderResponse {
+    const response: FolderResponse = {
+        ok: true,
+        folder,
+        affected: {
+            documents: 0,
+            staleNotes: 0,
+            removedNotes: 0,
+            embeddingsRemoved: 0
+        },
+        warnings: []
+    }
+
+    if (flags.created !== undefined) {
+        response.created = flags.created
+    }
+    if (flags.changed !== undefined) {
+        response.changed = flags.changed
+    }
+
+    return response
+}
+
+async function rewriteDocumentsForMovedFolder(root: string, config: RmemConfig, fromPath: string[], toPath: string[]): Promise<FolderResponse['affected']> {
+    const registry = await loadRegistry(root)
+    const oldPrefix = documentPathPrefix(fromPath)
+    const newPrefix = documentPathPrefix(toPath)
+    const affectedRecords = registry.documents.filter((record) => pathIsInside(record.path, oldPrefix))
+    let staleNotes = 0
+
+    for (const record of affectedRecords) {
+        const nextPath = replacePathPrefix(record.path, oldPrefix, newPrefix)
+        const fullPath = resolveMemoryPath(root, config.memoryRoot, nextPath)
+        const parsed = parseDocumentMarkdown(await readUtf8File(fullPath))
+        if (isCommandError(parsed)) {
+            continue
+        }
+
+        if (samePath(parsed.frontmatter.rmem.memoryPath, fromPath)) {
+            parsed.frontmatter.rmem.memoryPath = toPath
+            parsed.frontmatter.rmem.revision += 1
+            parsed.frontmatter.rmem.updatedAt = new Date().toISOString()
+        }
+
+        const body = replaceManagedHeader(parsed.body, parsed.frontmatter)
+        const finalContent = serializeDocument(parsed.frontmatter, body)
+        await atomicWriteUtf8(fullPath, finalContent)
+        const updated = await updateRegistryAfterWrite(root, config, nextPath, parsed.frontmatter, body, {
+            created: false,
+            changed: true,
+            staleOnly: false
+        })
+        staleNotes += updated.affected.staleNotes
+    }
+
+    const updatedRegistry = await loadRegistry(root)
+    updatedRegistry.documents = updatedRegistry.documents.filter((record) => !affectedRecords.some((affected) => affected.path === record.path))
+    updatedRegistry.notes = updatedRegistry.notes.filter((note) => !pathIsInside(note.source.documentPath, oldPrefix))
+    updatedRegistry.places = updatedRegistry.places.filter((place) => !pathIsInside(place.documentPath, oldPrefix))
+    const embeddingsBefore = updatedRegistry.embeddings?.vectors.length ?? 0
+    if (updatedRegistry.embeddings !== undefined) {
+        const noteIds = new Set(updatedRegistry.notes.map((note) => note.id))
+        updatedRegistry.embeddings.vectors = updatedRegistry.embeddings.vectors.filter((vector) => noteIds.has(vector.noteId))
+    }
+    const embeddingsAfter = updatedRegistry.embeddings?.vectors.length ?? 0
+    await saveRegistry(root, updatedRegistry)
+
+    return {
+        documents: affectedRecords.length,
+        staleNotes,
+        removedNotes: 0,
+        embeddingsRemoved: embeddingsBefore - embeddingsAfter
+    }
+}
+
+async function cleanupRegistryForRemovedFolder(root: string, path: string[]): Promise<FolderResponse['affected']> {
+    const registry = await loadRegistry(root)
+    const prefix = documentPathPrefix(path)
+    const documentsBefore = registry.documents.length
+    const notesBefore = registry.notes.length
+    const embeddingsBefore = registry.embeddings?.vectors.length ?? 0
+
+    registry.documents = registry.documents.filter((record) => !pathIsInside(record.path, prefix) && !memoryPathStartsWith(record.document.memoryPath, path))
+    registry.notes = registry.notes.filter((note) => !pathIsInside(note.source.documentPath, prefix))
+    registry.places = registry.places.filter((place) => !pathIsInside(place.documentPath, prefix))
+
+    if (registry.embeddings !== undefined) {
+        const noteIds = new Set(registry.notes.map((note) => note.id))
+        registry.embeddings.vectors = registry.embeddings.vectors.filter((vector) => noteIds.has(vector.noteId))
+    }
+
+    const embeddingsAfter = registry.embeddings?.vectors.length ?? 0
+    await saveRegistry(root, registry)
+
+    return {
+        documents: documentsBefore - registry.documents.length,
+        staleNotes: 0,
+        removedNotes: notesBefore - registry.notes.length,
+        embeddingsRemoved: embeddingsBefore - embeddingsAfter
+    }
+}
+
+async function archiveRegistryForRemovedFolder(root: string, config: RmemConfig, path: string[]): Promise<FolderResponse['affected']> {
+    const registry = await loadRegistry(root)
+    const prefix = documentPathPrefix(path)
+    const affectedRecords = registry.documents.filter((record) => !record.archived && (pathIsInside(record.path, prefix) || memoryPathStartsWith(record.document.memoryPath, path)))
+    const notesBefore = registry.notes.length
+    const embeddingsBefore = registry.embeddings?.vectors.length ?? 0
+
+    for (const record of affectedRecords) {
+        const fullPath = resolveMemoryPath(root, config.memoryRoot, record.path)
+        const archivePath = join(root, '.rmem', 'archive', record.path)
+        try {
+            const parsed = parseDocumentMarkdown(await readUtf8File(fullPath))
+            if (!isCommandError(parsed)) {
+                parsed.frontmatter.rmem.status = 'archived'
+                parsed.frontmatter.rmem.updatedAt = new Date().toISOString()
+                parsed.frontmatter.rmem.revision += 1
+                const archivedBody = replaceManagedHeader(parsed.body, parsed.frontmatter)
+                await atomicWriteUtf8(archivePath, serializeDocument(parsed.frontmatter, archivedBody))
+            }
+            await rm(fullPath, { force: true })
+        } catch {
+            await mkdir(dirname(archivePath), { recursive: true })
+        }
+        record.archived = true
+        record.document.status = 'archived'
+    }
+
+    registry.notes = registry.notes.map((note) => {
+        if (pathIsInside(note.source.documentPath, prefix)) {
+            return { ...note, status: 'archived' }
+        }
+
+        return note
+    })
+
+    if (registry.embeddings !== undefined) {
+        const activeNoteIds = new Set(registry.notes.filter((note) => note.status === 'active').map((note) => note.id))
+        registry.embeddings.vectors = registry.embeddings.vectors.filter((vector) => activeNoteIds.has(vector.noteId))
+    }
+
+    const embeddingsAfter = registry.embeddings?.vectors.length ?? 0
+    await saveRegistry(root, registry)
+
+    return {
+        documents: affectedRecords.length,
+        staleNotes: 0,
+        removedNotes: notesBefore - registry.notes.length,
+        embeddingsRemoved: embeddingsBefore - embeddingsAfter
+    }
+}
+
+function documentPathPrefix(path: string[]): string {
+    const physicalUnits = path[0] === 'project' ? path.slice(1) : path
+    return physicalUnits.join('/')
+}
+
+function pathIsInside(path: string, prefix: string): boolean {
+    if (prefix.length === 0) {
+        return true
+    }
+
+    return path === prefix || path.startsWith(`${prefix}/`)
+}
+
+function replacePathPrefix(path: string, oldPrefix: string, newPrefix: string): string {
+    if (path === oldPrefix) {
+        return newPrefix
+    }
+
+    return `${newPrefix}/${path.slice(oldPrefix.length + 1)}`
+}
+
+function samePath(left: string[], right: string[]): boolean {
+    return left.length === right.length && left.every((unit, index) => unit === right[index])
+}
+
+function memoryPathStartsWith(path: string[], prefix: string[]): boolean {
+    return prefix.every((unit, index) => path[index] === unit)
 }
 
 export async function editCommand(root: string, documentPath: string, request: EditDocumentRequest): Promise<CommandResult<WriteDocumentResponse>> {
@@ -334,18 +865,58 @@ export async function removeCommand(root: string, documentPath: string): Promise
 }
 
 export async function checkCommand(root: string): Promise<CommandResult<CheckResponse>> {
-    const config = await loadConfig(root)
+    const baseConfig = await loadBaseConfig(root)
+    if (isCommandError(baseConfig)) {
+        return baseConfig
+    }
+
+    const tree = await loadTreeIndex(root, baseConfig.memoryRoot)
+    const treeIssues: RmemWarning[] = []
+    const config: RmemConfig = !isCommandError(tree)
+        ? { ...baseConfig, areas: areasFromTree(tree) }
+        : baseConfig
+    if (isCommandError(tree)) {
+        treeIssues.push({
+            code: tree.code,
+            message: tree.message,
+            details: tree.details
+        })
+    } else {
+        await saveTreeIndexBackup(root, tree)
+        for (const record of tree.folders) {
+            if ((record.area.description ?? '').trim().length === 0) {
+                treeIssues.push({
+                    code: 'MEMORY_FOLDER_DESCRIPTION_EMPTY',
+                    message: 'Memory folder description is empty.',
+                    details: { path: record.key }
+                })
+            }
+        }
+    }
+
+    const configCheck = await loadConfig(root)
+    if (isCommandError(configCheck) && !treeIssues.some((issue) => issue.code === configCheck.code)) {
+        treeIssues.push({
+            code: configCheck.code,
+            message: configCheck.message,
+            details: configCheck.details
+        })
+    }
+
     if (isCommandError(config)) {
         return config
     }
 
     const registry = await loadRegistry(root)
-    const issues: RmemWarning[] = []
+    const issues: RmemWarning[] = [...treeIssues]
     const documentIds = new Set<string>()
 
     const memoryRootPath = join(root, config.memoryRoot)
     for await (const documentPath of listMarkdownFiles(memoryRootPath)) {
         const registryPath = toRegistryDocumentPath(relative(memoryRootPath, documentPath))
+        if (registryPath === 'tree-index.md') {
+            continue
+        }
         try {
             const content = normalizeLineEndings(await readUtf8File(documentPath))
             const parsed = parseDocumentMarkdown(content)
@@ -377,14 +948,13 @@ export async function checkCommand(root: string): Promise<CommandResult<CheckRes
                 })
             }
 
-            for (const unit of parsed.frontmatter.rmem.memoryPath) {
-                if (config.areas[unit] === undefined) {
-                    issues.push({
-                        code: 'INVALID_MEMORY_PATH',
-                        message: 'Document references unknown memory path area.',
-                        details: { path: registryPath, unit }
-                    })
-                }
+            const memoryPathKey = areaKeyFromPath(parsed.frontmatter.rmem.memoryPath)
+            if (config.areas[memoryPathKey] === undefined) {
+                issues.push({
+                    code: 'MEMORY_FOLDER_NOT_FOUND',
+                    message: 'Document references unknown memory folder.',
+                    details: { path: registryPath, memoryPath: memoryPathKey }
+                })
             }
 
             const registryRecord = registry.documents.find((record) => record.path === registryPath)
@@ -505,4 +1075,3 @@ export async function searchCommand(root: string, query: string): Promise<Comman
         warnings: queryEmbedding.warnings
     })
 }
-

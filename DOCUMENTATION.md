@@ -107,6 +107,22 @@ areas:
     parent: project
 ```
 
+Primary source for folder descriptions is `memory/tree-index.md`. The file is plain Markdown and is intended for direct human and agent editing.
+
+```md
+# Memory Tree Index
+
+<!-- rmem:tree-index start -->
+
+- `project` ? General project memory.
+  - `project/architecture` ? Architecture, components, and system decisions.
+  - `project/rules` ? Agent and developer operating rules.
+
+<!-- rmem:tree-index end -->
+```
+
+If `tree-index.md` is missing or invalid, normal operations are blocked. Existing `memory/` folders can be scaffolded explicitly with `rmem tree generate`; folder descriptions must then be filled manually. A derived backup/cache is stored at `.rmem/index/tree-index.json` and can be used by `rmem tree repair`, but it is never used as a silent fallback.
+
 ### `indexing.noteRebuildMode`
 
 Тип: `'sync' | 'manual'`.
@@ -329,6 +345,12 @@ rmem read <document-path>
 rmem write <document-path> [--from <file>]
 rmem edit <document-path>
 rmem remove <document-path>
+rmem folder create <memory-path> --description <text> [--title <text>]
+rmem folder update <memory-path> --description <text> [--title <text>]
+rmem folder move <from-memory-path> <to-memory-path> [--description <text>] [--title <text>]
+rmem folder remove <memory-path> [--delete-files]
+rmem tree generate
+rmem tree repair
 rmem check
 rmem --version
 ```
@@ -419,6 +441,8 @@ printf '# System\n\nBody\n' | rmem write architecture/system.md
 
 - `--from <file>` — прочитати content з UTF-8 файлу.
 
+Якщо `<document-path>` вказує на підпапку, ця підпапка має бути описана в `memory/tree-index.md`. Для нового document без frontmatter CLI автоматично виставляє `rmem.memoryPath` з target folder, наприклад `architecture/system.md` → `project/architecture`. Якщо папка не зареєстрована, команда повертає `MEMORY_FOLDER_NOT_FOUND` з підказкою створити її.
+
 Поведінка:
 
 1. читає UTF-8 input
@@ -482,6 +506,61 @@ rmem remove architecture/old-decision.md
 7. оновлює canonical document у `memoryRoot`
 8. позначає повʼязані notes як `archived`
 
+### `rmem folder create <memory-path>`
+
+Adds a semantic folder to canonical `memory/tree-index.md`. The physical directory does not need to exist yet; `rmem write` creates it automatically on first document write.
+
+```bash
+rmem folder create project/architecture --description "Architecture, components, and system decisions."
+```
+
+Options:
+
+- `--description <text>` ? required folder description for search/list context.
+- `--title <text>` ? optional title; generated from the path segment when omitted.
+
+### `rmem folder update <memory-path>`
+
+Updates the description of an existing folder in `memory/tree-index.md`.
+
+```bash
+rmem folder update project/architecture --description "Updated architecture memory description."
+```
+
+### `rmem folder move <from-memory-path> <to-memory-path>`
+
+Renames or moves a folder.
+
+```bash
+rmem folder move project/architecture project/design --description "Design knowledge."
+```
+
+Behavior:
+
+- updates `memory/tree-index.md`;
+- moves the physical directory if it exists;
+- updates `rmem.memoryPath` in affected documents;
+- updates registry, structural places, notes, and vector index consistency.
+
+### `rmem folder remove <memory-path> [--delete-files]`
+
+Safely removes a folder from active memory.
+
+```bash
+rmem folder remove project/old-area
+rmem folder remove project/old-area --delete-files
+```
+
+By default, affected documents are archived under `.rmem/archive`, folder entries are removed from `tree-index.md`, and active registry/index state is cleaned. Recursive physical deletion is allowed only with explicit `--delete-files`. Root folder `project` is protected.
+
+### `rmem tree generate`
+
+Creates a skeleton `memory/tree-index.md` from the existing filesystem structure. Descriptions are intentionally empty; `rmem check` reports `MEMORY_FOLDER_DESCRIPTION_EMPTY` until they are filled manually.
+
+### `rmem tree repair`
+
+Restores `memory/tree-index.md` from `.rmem/index/tree-index.json` when a backup exists.
+
 ### `rmem check`
 
 Перевіряє consistency памʼяті.
@@ -519,7 +598,7 @@ rmem --version
 ```json
 {
     "ok": true,
-    "version": "1.0.0"
+    "version": "1.1.0"
 }
 ```
 

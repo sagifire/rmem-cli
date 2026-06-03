@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
     checkCommand,
+    createFolderCommand,
     devDocsParseCommand,
     devEmbeddingsStatusCommand,
     devNotesListCommand,
@@ -19,6 +20,10 @@ test('public command response contracts stay stable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rmem-contract-'))
     try {
         await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/architecture', {
+            title: 'Architecture',
+            description: 'Architecture memory.'
+        })
         const write = await writeCommand(root, 'architecture/memory.md', '# Project Memory\n\nDocuments are canonical project memory.\n')
         assert.deepEqual(normalize(write), {
             ok: true,
@@ -29,7 +34,7 @@ test('public command response contracts stay stable', async () => {
                 kind: 'overview',
                 status: 'draft',
                 revision: 1,
-                memoryPath: ['project'],
+                memoryPath: ['project', 'architecture'],
                 language: 'mixed',
                 summary: 'Project Memory'
             },
@@ -66,7 +71,7 @@ test('public command response contracts stay stable', async () => {
                         kind: 'overview',
                         status: 'draft',
                         revision: 1,
-                        memoryPath: ['project'],
+                        memoryPath: ['project', 'architecture'],
                         language: 'mixed',
                         summary: 'Project Memory'
                     }
@@ -84,7 +89,7 @@ test('public command response contracts stay stable', async () => {
                 kind: 'overview',
                 status: 'draft',
                 revision: 1,
-                memoryPath: ['project'],
+                memoryPath: ['project', 'architecture'],
                 language: 'mixed',
                 summary: 'Project Memory'
             },
@@ -116,6 +121,10 @@ test('dev command response contracts stay stable', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rmem-contract-'))
     try {
         await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/guide', {
+            title: 'Guide',
+            description: 'Guides.'
+        })
         await writeCommand(root, 'guide/search.md', '# Search Guide\n\nSearch reports return linked knowledge and commands.\n')
 
         const notes = await devNotesListCommand(root)
@@ -219,4 +228,22 @@ async function writeOfflineConfig(root: string): Promise<void> {
         '  noteRebuildMode: sync',
         ''
     ].join('\n'), 'utf8')
+    await writeFile(join(root, 'memory', 'tree-index.md'), treeIndex([
+        ['project', 'Offline test memory.'],
+        ['project/architecture', 'Architecture memory.'],
+        ['project/guide', 'Guides.']
+    ]), 'utf8')
+}
+
+function treeIndex(entries: [string, string][]): string {
+    return [
+        '# Memory Tree Index',
+        '',
+        '<!-- rmem:tree-index start -->',
+        '',
+        ...entries.map(([path, description]) => `${'  '.repeat(path.split('/').length - 1)}- \`${path}\` — ${description}`),
+        '',
+        '<!-- rmem:tree-index end -->',
+        ''
+    ].join('\n')
 }

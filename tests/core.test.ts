@@ -6,6 +6,7 @@ import test from 'node:test'
 import { spawnSync } from 'node:child_process'
 import {
     checkCommand,
+    createFolderCommand,
     devLinksValidateCommand,
     editCommand,
     generateLlmDerivedNotes,
@@ -15,8 +16,12 @@ import {
     parseDocumentMarkdown,
     readCommand,
     removeCommand,
+    moveFolderCommand,
+    removeFolderCommand,
     searchCommand,
     searchRegistry,
+    treeGenerateCommand,
+    updateFolderCommand,
     writeCommand
 } from '../packages/rmem-core/dist/index.js'
 
@@ -24,6 +29,10 @@ test('document workflow writes, reads, searches, edits and checks memory', async
     const root = await mkdtemp(join(tmpdir(), 'rmem-'))
     try {
         await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/architecture', {
+            title: 'Architecture',
+            description: 'Architecture memory.'
+        })
         const write = await writeCommand(root, 'architecture/memory.md', '# Памʼять проєкту\n\nДокументи є джерелом істини.\n')
         assert.equal(write.ok, true)
         assert.equal(write.created, true)
@@ -67,6 +76,10 @@ test('edit rejects missing, ambiguous and mismatched exact replacements', async 
     const root = await mkdtemp(join(tmpdir(), 'rmem-'))
     try {
         await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/rules', {
+            title: 'Rules',
+            description: 'Rules.'
+        })
         await writeCommand(root, 'rules/edit.md', '# Edit\n\nsame\nsame\n')
         const read = await readCommand(root, 'rules/edit.md')
         assert.equal(read.ok, true)
@@ -121,6 +134,10 @@ test('managed header is generated from frontmatter only', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rmem-'))
     try {
         await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/guide', {
+            title: 'Guide',
+            description: 'Guides.'
+        })
         await writeCommand(root, 'guide/header.md', '# Header\n\nBody\n')
         const fullPath = join(root, 'memory', 'guide', 'header.md')
         const content = await readFile(fullPath, 'utf8')
@@ -149,11 +166,124 @@ test('remove archives without deleting canonical document file', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rmem-'))
     try {
         await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/archive', {
+            title: 'Archive',
+            description: 'Archived documents.'
+        })
         await writeCommand(root, 'archive/me.md', '# Archive Me\n\nBody\n')
         const result = await removeCommand(root, 'archive/me.md')
         assert.equal(result.ok, true)
         const content = await readFile(join(root, 'memory', 'archive', 'me.md'), 'utf8')
         assert.equal(content.includes('status: archived'), true)
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('folder commands manage agent-facing memory areas', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeOfflineConfig(root)
+
+        const missing = await writeCommand(root, 'research/memory.md', '# Missing\n\nBody\n')
+        assert.equal(isCommandError(missing), true)
+        if (isCommandError(missing)) {
+            assert.equal(missing.code, 'MEMORY_FOLDER_NOT_FOUND')
+            assert.equal(missing.suggestion?.includes('rmem folder create project/research'), true)
+        }
+
+        const created = await createFolderCommand(root, 'project/research', {
+            title: 'Research',
+            description: 'Research notes.'
+        })
+        assert.equal(created.ok, true)
+        assert.equal(created.created, true)
+        assert.equal(created.folder.description, 'Research notes.')
+        const treeContent = await readFile(join(root, 'memory', 'tree-index.md'), 'utf8')
+        assert.equal(treeContent.includes('project/research'), true)
+
+        const write = await writeCommand(root, 'research/memory.md', '# Memory Research\n\nDocuments define memory structure.\n')
+        assert.equal(write.ok, true)
+        assert.deepEqual(write.document.memoryPath, ['project', 'research'])
+
+        const updated = await updateFolderCommand(root, 'project/research', {
+            description: 'Updated research description.'
+        })
+        assert.equal(updated.ok, true)
+        assert.equal(updated.folder.description, 'Updated research description.')
+
+        const moved = await moveFolderCommand(root, 'project/research', 'project/discovery', {
+            title: 'Discovery',
+            description: 'Discovery knowledge.'
+        })
+        assert.equal(moved.ok, true)
+        assert.equal(moved.moved, true)
+        assert.equal(moved.affected.documents, 1)
+
+        const movedRead = await readCommand(root, 'discovery/memory.md')
+        assert.equal(movedRead.ok, true)
+        assert.deepEqual(movedRead.document.memoryPath, ['project', 'discovery'])
+
+        const removed = await removeFolderCommand(root, 'project/discovery')
+        assert.equal(removed.ok, true)
+        assert.equal(removed.removed, true)
+        assert.equal(removed.affected.documents, 1)
+
+        const check = await checkCommand(root)
+        assert.equal(check.ok, true)
+        assert.equal(check.valid, true)
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('tree index gates memory operations and can be generated explicitly', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await mkdir(join(root, 'memory', 'architecture'), { recursive: true })
+        const blocked = await writeCommand(root, 'architecture/memory.md', '# Blocked\n\nBody\n')
+        assert.equal(isCommandError(blocked), true)
+        if (isCommandError(blocked)) {
+            assert.equal(blocked.code, 'TREE_INDEX_NOT_FOUND')
+        }
+
+        const generated = await treeGenerateCommand(root)
+        assert.equal(generated.ok, true)
+        assert.equal(generated.created, true)
+        assert.equal(generated.folders.some((folder) => folder.key === 'project/architecture'), true)
+
+        const check = await checkCommand(root)
+        assert.equal(check.ok, true)
+        assert.equal(check.valid, false)
+        assert.equal(check.issues.some((issue) => issue.code === 'MEMORY_FOLDER_DESCRIPTION_EMPTY'), true)
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('memory folders use full path keys for duplicate segment names', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/backend', {
+            description: 'Backend memory.'
+        })
+        await createFolderCommand(root, 'project/frontend', {
+            description: 'Frontend memory.'
+        })
+        await createFolderCommand(root, 'project/backend/api', {
+            description: 'Backend API memory.'
+        })
+        await createFolderCommand(root, 'project/frontend/api', {
+            description: 'Frontend API memory.'
+        })
+
+        const backend = await writeCommand(root, 'backend/api/contracts.md', '# Backend API\n\nBackend contracts.\n')
+        const frontend = await writeCommand(root, 'frontend/api/contracts.md', '# Frontend API\n\nFrontend contracts.\n')
+        assert.equal(backend.ok, true)
+        assert.equal(frontend.ok, true)
+        assert.deepEqual(backend.document.memoryPath, ['project', 'backend', 'api'])
+        assert.deepEqual(frontend.document.memoryPath, ['project', 'frontend', 'api'])
     } finally {
         await rm(root, { recursive: true, force: true })
     }
@@ -221,7 +351,7 @@ test('CLI returns version metadata', () => {
     assert.equal(result.status, 0)
     const parsed = JSON.parse(result.stdout) as { ok: boolean, version: string }
     assert.equal(parsed.ok, true)
-    assert.equal(parsed.version, '1.0.0')
+    assert.equal(parsed.version, '1.1.0')
 })
 
 test('frontmatter parser decodes quoted scalar escapes', () => {
@@ -475,4 +605,24 @@ async function writeOfflineConfig(root: string): Promise<void> {
         '  noteRebuildMode: sync',
         ''
     ].join('\n'), 'utf8')
+    await writeFile(join(root, 'memory', 'tree-index.md'), treeIndex([
+        ['project', 'Offline test memory.'],
+        ['project/architecture', 'Architecture memory.'],
+        ['project/rules', 'Rules.'],
+        ['project/guide', 'Guides.'],
+        ['project/archive', 'Archived documents.']
+    ]), 'utf8')
+}
+
+function treeIndex(entries: [string, string][]): string {
+    return [
+        '# Memory Tree Index',
+        '',
+        '<!-- rmem:tree-index start -->',
+        '',
+        ...entries.map(([path, description]) => `${'  '.repeat(path.split('/').length - 1)}- \`${path}\` — ${description}`),
+        '',
+        '<!-- rmem:tree-index end -->',
+        ''
+    ].join('\n')
 }

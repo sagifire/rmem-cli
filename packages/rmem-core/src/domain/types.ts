@@ -57,6 +57,12 @@ export type RmemErrorCode =
     | 'INVALID_DOCUMENT_KIND'
     | 'INVALID_DOCUMENT_STATUS'
     | 'INVALID_MEMORY_PATH'
+    | 'TREE_INDEX_NOT_FOUND'
+    | 'TREE_INDEX_INVALID'
+    | 'MEMORY_FOLDER_NOT_FOUND'
+    | 'MEMORY_FOLDER_ALREADY_EXISTS'
+    | 'MEMORY_FOLDER_DESCRIPTION_EMPTY'
+    | 'MEMORY_FOLDER_PROTECTED'
     | 'INVALID_MARKDOWN'
     | 'ENCODING_ERROR'
     | 'OLD_TEXT_NOT_FOUND'
@@ -194,6 +200,11 @@ export type MemoryAreaConfig = {
     title: string
     description?: string
     parent?: string
+}
+
+export type MemoryAreaReport = MemoryPathUnitReport & {
+    path: string[]
+    treeIndexPath: string
 }
 
 export type RmemConfig = {
@@ -364,4 +375,50 @@ export type CheckResponse = {
     ok: true
     valid: boolean
     issues: RmemWarning[]
+}
+
+export type FolderWriteRequest = {
+    title?: string
+    description: string
+}
+
+export type FolderMoveRequest = {
+    title?: string
+    description?: string
+}
+
+export type FolderRemoveRequest = {
+    deleteFiles?: boolean
+}
+
+export type FolderResponse = {
+    ok: true
+    folder: MemoryAreaReport
+    created?: boolean
+    changed?: boolean
+    moved?: boolean
+    removed?: boolean
+    affected: {
+        documents: number
+        staleNotes: number
+        removedNotes: number
+        embeddingsRemoved: number
+    }
+    warnings: RmemWarning[]
+}
+
+export type TreeGenerateResponse = {
+    ok: true
+    created: boolean
+    treeIndexPath: string
+    folders: MemoryAreaReport[]
+    warnings: RmemWarning[]
+}
+
+export type TreeRepairResponse = {
+    ok: true
+    repaired: boolean
+    treeIndexPath: string
+    folders: MemoryAreaReport[]
+    warnings: RmemWarning[]
 }

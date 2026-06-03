@@ -5,6 +5,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
     checkCommand,
+    createFolderCommand,
     searchCommand,
     writeCommand
 } from '../packages/rmem-core/dist/index.js'
@@ -15,6 +16,10 @@ test('performance smoke handles small multi-document corpus offline', async () =
 
     try {
         await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/performance', {
+            title: 'Performance',
+            description: 'Performance smoke documents.'
+        })
         for (let index = 0; index < 25; index += 1) {
             const content = [
                 `# Performance Document ${index}`,
@@ -58,4 +63,21 @@ async function writeOfflineConfig(root: string): Promise<void> {
         '  noteRebuildMode: sync',
         ''
     ].join('\n'), 'utf8')
+    await writeFile(join(root, 'memory', 'tree-index.md'), treeIndex([
+        ['project', 'Offline performance memory.'],
+        ['project/performance', 'Performance smoke documents.']
+    ]), 'utf8')
+}
+
+function treeIndex(entries: [string, string][]): string {
+    return [
+        '# Memory Tree Index',
+        '',
+        '<!-- rmem:tree-index start -->',
+        '',
+        ...entries.map(([path, description]) => `${'  '.repeat(path.split('/').length - 1)}- \`${path}\` — ${description}`),
+        '',
+        '<!-- rmem:tree-index end -->',
+        ''
+    ].join('\n')
 }

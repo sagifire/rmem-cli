@@ -1,10 +1,11 @@
 import { mkdir, readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import type { RmemConfig } from './types.js'
-import { commandError } from './errors.js'
+import { commandError, isCommandError } from './errors.js'
 import type { RmemCommandError } from './types.js'
 import { parseYamlObject } from './frontmatter.js'
 import { atomicWriteUtf8 } from './storage.js'
+import { mergeTreeIndex } from './areas.js'
 
 export function defaultConfig(): RmemConfig {
     return {
@@ -35,16 +36,25 @@ export function defaultConfig(): RmemConfig {
 }
 
 export async function ensureConfig(root: string): Promise<RmemConfig> {
-    const configPath = join(root, '.rmem', 'config.yaml')
+    const config = await ensureBaseConfig(root)
+    const merged = await mergeTreeIndex(root, config)
+    if (isCommandError(merged)) {
+        throw new Error(`${merged.code}: ${merged.message}`)
+    }
 
+    return merged
+}
+
+export async function ensureBaseConfig(root: string): Promise<RmemConfig> {
+    const configPath = join(root, '.rmem', 'config.yaml')
     try {
-        return await readConfigFile(root)
+        return await readBaseConfigFile(root)
     } catch (error) {
         if (isNodeError(error) && error.code === 'ENOENT') {
             const config = defaultConfig()
             await mkdir(dirname(configPath), { recursive: true })
-            await atomicWriteUtf8(configPath, serializeConfig(config))
             await mkdir(join(root, config.memoryRoot), { recursive: true })
+            await saveConfig(root, config)
             return config
         }
 
@@ -54,14 +64,12 @@ export async function ensureConfig(root: string): Promise<RmemConfig> {
 
 export async function loadConfig(root: string): Promise<RmemConfig | RmemCommandError> {
     try {
-        return await readConfigFile(root)
+        const merged = await mergeTreeIndex(root, await readBaseConfigFile(root))
+        return merged
     } catch (error) {
         if (isNodeError(error) && error.code === 'ENOENT') {
-            return commandError({
-                code: 'CONFIG_NOT_FOUND',
-                message: '.rmem/config.yaml was not found.',
-                suggestion: 'Run any write command first or create .rmem/config.yaml.'
-            })
+            const merged = await mergeTreeIndex(root, defaultConfig())
+            return merged
         }
 
         return commandError({
@@ -73,7 +81,24 @@ export async function loadConfig(root: string): Promise<RmemConfig | RmemCommand
     }
 }
 
-async function readConfigFile(root: string): Promise<RmemConfig> {
+export async function loadBaseConfig(root: string): Promise<RmemConfig | RmemCommandError> {
+    try {
+        return await readBaseConfigFile(root)
+    } catch (error) {
+        if (isNodeError(error) && error.code === 'ENOENT') {
+            return defaultConfig()
+        }
+
+        return commandError({
+            code: 'INVALID_CONFIG',
+            message: 'Failed to read rmem config.',
+            details: String(error),
+            suggestion: 'Check .rmem/config.yaml.'
+        })
+    }
+}
+
+async function readBaseConfigFile(root: string): Promise<RmemConfig> {
     const yamlPath = join(root, '.rmem', 'config.yaml')
     try {
         return parseConfig(await readFile(yamlPath, 'utf8'), 'yaml')
@@ -85,6 +110,11 @@ async function readConfigFile(root: string): Promise<RmemConfig> {
 
     const jsonPath = join(root, '.rmem', 'config.json')
     return parseConfig(await readFile(jsonPath, 'utf8'), 'json')
+}
+
+export async function saveConfig(root: string, config: RmemConfig): Promise<void> {
+    await mkdir(join(root, '.rmem'), { recursive: true })
+    await atomicWriteUtf8(join(root, '.rmem', 'config.yaml'), serializeConfig(config))
 }
 
 function parseConfig(content: string, format: 'yaml' | 'json'): RmemConfig {
