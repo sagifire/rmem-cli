@@ -44,6 +44,22 @@ if (version.ok !== true || version.version !== '1.0.0') {
 }
 
 const docPath = join(appRoot, 'doc.md')
+const configPath = join(appRoot, '.rmem', 'config.yaml')
+mkdirSync(dirname(configPath), { recursive: true })
+writeFileSync(configPath, [
+    'schemaVersion: 1',
+    '',
+    'memoryRoot: memory',
+    '',
+    'areas:',
+    '  project:',
+    '    title: Project',
+    '    description: Offline package smoke memory.',
+    '',
+    'indexing:',
+    '  noteRebuildMode: sync',
+    ''
+].join('\n'), 'utf8')
 writeFileSync(docPath, '# Package Smoke\n\nInstalled package writes canonical memory.\n', 'utf8')
 run(process.execPath, [rmemCli, 'write', 'smoke.md', '--from', docPath], appRoot, { quiet: true })
 
