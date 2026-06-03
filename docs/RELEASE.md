@@ -62,7 +62,7 @@ npm run smoke:real-models
 
 ```bash
 npm publish --workspace @rmem/core --dry-run --access public
-npm publish --workspace rmem-cli --dry-run
+npm publish --workspace rmem-cli --dry-run --access public
 ```
 
 Порядок важливий: `@rmem/core` публікується перед `rmem-cli`, бо CLI залежить від core.
@@ -73,7 +73,7 @@ npm publish --workspace rmem-cli --dry-run
 
 ```bash
 npm publish --workspace @rmem/core --provenance --access public
-npm publish --workspace rmem-cli --provenance
+npm publish --workspace rmem-cli --provenance --access public
 ```
 
 Якщо provenance недоступний у локальному середовищі, не публікувати локально без окремого рішення maintainer-а.

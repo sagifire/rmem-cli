@@ -41,7 +41,7 @@ jobs:
       - name: Validate npm publish dry-run
         run: |
           npm publish --workspace @rmem/core --dry-run --access public
-          npm publish --workspace rmem-cli --dry-run
+          npm publish --workspace rmem-cli --dry-run --access public
 
       - name: Publish @rmem/core
         if: ${{ github.event.inputs.publish == 'true' }}
@@ -51,6 +51,6 @@ jobs:
 
       - name: Publish rmem-cli
         if: ${{ github.event.inputs.publish == 'true' }}
-        run: npm publish --workspace rmem-cli --provenance
+        run: npm publish --workspace rmem-cli --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
