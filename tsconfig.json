@@ -1,0 +1,14 @@
+{
+    "files": [],
+    "references": [
+        {
+            "path": "packages/rmem-core"
+        },
+        {
+            "path": "packages/rmem-cli"
+        },
+        {
+            "path": "tests"
+        }
+    ]
+}

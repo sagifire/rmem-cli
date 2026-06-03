@@ -1,0 +1,146 @@
+import type { MemoryPathUnitReport, RegistryState, RmemConfig, SearchResponse, SearchResult } from './types.js'
+
+export function searchRegistry(input: {
+    query: string
+    registry: RegistryState
+    config: RmemConfig
+}): SearchResponse {
+    const terms = tokenize(input.query)
+    const scored = input.registry.notes
+        .filter((note) => note.status !== 'archived')
+        .map((note) => {
+            const document = input.registry.documents.find((candidate) => candidate.document.documentId === note.source.documentId)
+            const place = input.registry.places.find((candidate) => candidate.id === note.source.structuralPlaceId)
+            const score = scoreText(note.retrievalText, terms)
+            return { note, document, place, score }
+        })
+        .filter((item) => item.document !== undefined && item.score > 0)
+        .sort((left, right) => right.score - left.score)
+        .slice(0, 5)
+
+    const results: SearchResult[] = scored.map((item, index) => {
+        const document = item.document
+        if (document === undefined) {
+            throw new Error('Search candidate document is missing.')
+        }
+
+        const result: SearchResult = {
+            rank: index + 1,
+            score: item.score,
+            note: {
+                id: item.note.id,
+                title: item.note.title,
+                type: item.note.type,
+                status: item.note.status,
+                sourceSummary: item.note.sourceSummary
+            },
+            document: {
+                path: document.path,
+                documentId: document.document.documentId,
+                title: document.document.title,
+                kind: document.document.kind,
+                status: document.document.status
+            },
+            memoryPath: memoryPathReport(document.document.memoryPath, input.config),
+            linkedKnowledge: item.note.links.map((link) => {
+                const linked = {
+                    noteId: link.targetNoteId,
+                    title: link.targetNoteId,
+                    type: link.type
+                }
+                if (link.reason !== undefined) {
+                    return {
+                        ...linked,
+                        reason: link.reason
+                    }
+                }
+
+                return linked
+            }),
+            recommendedCommands: [
+                `rmem read ${document.path}`
+            ]
+        }
+
+        if (document.document.summary !== undefined) {
+            result.document.summary = document.document.summary
+        }
+
+        if (item.note.contextualizedSummary !== undefined) {
+            result.note = {
+                id: item.note.id,
+                title: item.note.title,
+                type: item.note.type,
+                status: item.note.status,
+                sourceSummary: item.note.sourceSummary,
+                contextualizedSummary: item.note.contextualizedSummary
+            }
+        }
+
+        if (item.place !== undefined) {
+            result.targetPlace = {
+                placeId: item.place.id,
+                headingPath: item.place.headingPath,
+                excerpt: item.note.source.sourceQuote
+            }
+        }
+
+        return result
+    })
+
+    return {
+        ok: true,
+        query: input.query,
+        summary: results.length === 0
+            ? 'No relevant memory notes were found.'
+            : `Found ${results.length} relevant memory result(s).`,
+        results,
+        recommendedReads: results.map((result) => ({
+            path: result.document.path,
+            reason: 'Relevant canonical document for this query.'
+        })),
+        warnings: input.registry.notes.some((note) => note.status === 'stale')
+            ? [{ code: 'STALE_INDEX', message: 'Some notes are stale and search results may need rebuild.' }]
+            : []
+    }
+}
+
+export function memoryPathReport(path: string[], config: RmemConfig): MemoryPathUnitReport[] {
+    return path.map((key) => {
+        const area = config.areas[key]
+        if (area === undefined) {
+            return { key, title: key }
+        }
+
+        const result: MemoryPathUnitReport = {
+            key,
+            title: area.title
+        }
+
+        if (area.description !== undefined) {
+            result.description = area.description
+        }
+
+        return result
+    })
+}
+
+function tokenize(value: string): string[] {
+    return value
+        .toLowerCase()
+        .split(/[^\p{L}\p{N}_-]+/u)
+        .map((term) => term.trim())
+        .filter((term) => term.length > 0)
+}
+
+function scoreText(text: string, terms: string[]): number {
+    const lower = text.toLowerCase()
+    let score = 0
+
+    for (const term of terms) {
+        const occurrences = lower.split(term).length - 1
+        score += occurrences
+    }
+
+    return score
+}

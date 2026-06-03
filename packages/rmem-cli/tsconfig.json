@@ -1,0 +1,22 @@
+{
+    "compilerOptions": {
+        "target": "ES2022",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "strict": true,
+        "noUncheckedIndexedAccess": true,
+        "exactOptionalPropertyTypes": true,
+        "rootDir": "src",
+        "outDir": "dist",
+        "composite": true,
+        "skipLibCheck": true
+    },
+    "references": [
+        {
+            "path": "../rmem-core"
+        }
+    ],
+    "include": [
+        "src/**/*.ts"
+    ]
+}

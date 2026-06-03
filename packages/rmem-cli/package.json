@@ -1,0 +1,11 @@
+{
+    "name": "rmem-cli",
+    "version": "1.0.0",
+    "type": "module",
+    "bin": {
+        "rmem": "./dist/main.js"
+    },
+    "dependencies": {
+        "@rmem/core": "1.0.0"
+    }
+}
