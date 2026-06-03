@@ -1,9 +1,17 @@
 {
     "name": "rmem-cli",
     "version": "1.0.0",
+    "description": "Document-oriented semantic project memory CLI.",
     "type": "module",
     "bin": {
         "rmem": "./dist/main.js"
+    },
+    "files": [
+        "dist",
+        "package.json"
+    ],
+    "engines": {
+        "node": ">=22"
     },
     "dependencies": {
         "@rmem/core": "1.0.0"

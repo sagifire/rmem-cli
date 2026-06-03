@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import {
     checkCommand,
@@ -23,10 +25,20 @@ async function main(): Promise<void> {
     const args = process.argv.slice(2)
     const command = args[0]
     const root = process.cwd()
+    const version = await readCliVersion()
+
+    if (command === '--version' || command === '-v') {
+        printJson({
+            ok: true,
+            version
+        })
+        return
+    }
 
     if (command === undefined || command === '--help' || command === '-h') {
         printJson({
             ok: true,
+            version,
             commands: [
                 'search <query>',
                 'list [memory-path]',
@@ -208,6 +220,20 @@ function isEditRequestError(value: unknown): value is {
         && value !== null
         && 'ok' in value
         && (value as { ok: unknown }).ok === false
+}
+
+async function readCliVersion(): Promise<string> {
+    const packageJsonPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'package.json')
+    try {
+        const parsed = JSON.parse(await readFile(packageJsonPath, 'utf8')) as { version?: unknown }
+        if (typeof parsed.version === 'string' && parsed.version.length > 0) {
+            return parsed.version
+        }
+    } catch {
+        return 'unknown'
+    }
+
+    return 'unknown'
 }
 
 main().catch((error: unknown) => {

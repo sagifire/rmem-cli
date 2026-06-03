@@ -294,6 +294,30 @@ Managed header генерується CLI з frontmatter:
 
 Не редагуйте managed header вручну. Після `write`, `edit` і `remove` він регенерується.
 
+### Supported YAML subset
+
+`rmem-cli` підтримує мінімальний YAML subset, достатній для `.rmem/config.yaml` і document frontmatter:
+
+- mappings через `key: value`
+- nested mappings через indentation spaces
+- arrays через `- value`
+- folded/literal blocks через `>` і `|`
+- double-quoted scalars з JSON escape decoding
+- single-quoted scalars з YAML-style `''` escaping
+- booleans `true` / `false`
+- integer numbers
+- comments на окремих рядках
+
+Unsupported syntax повертає явну помилку, а не silent ignore:
+
+- tabs for indentation
+- duplicate mapping keys
+- sequence item outside sequence
+- mapping entry outside mapping
+- line without `:` separator
+
+Це не повна YAML бібліотека. Якщо потрібні довільні YAML можливості, наступний production крок — замінити subset parser на стабільну YAML dependency.
+
 ## Public commands
 
 Public commands — стабільний agent-facing API:
@@ -306,6 +330,7 @@ rmem write <document-path> [--from <file>]
 rmem edit <document-path>
 rmem remove <document-path>
 rmem check
+rmem --version
 ```
 
 ### `rmem search <query>`
@@ -479,6 +504,26 @@ rmem check
 - note references to missing structural places
 - stale active notes
 - structural places referencing missing documents
+- missing, stale or provider-incompatible vector index
+
+### `rmem --version`
+
+Повертає machine-readable версію CLI.
+
+```bash
+rmem --version
+```
+
+Відповідь:
+
+```json
+{
+    "ok": true,
+    "version": "1.0.0"
+}
+```
+
+Версія читається з package metadata `rmem-cli/package.json`, щоб CLI не мав окремого hardcoded source-of-truth.
 
 ## Dev commands
 
@@ -568,6 +613,20 @@ Default config перевіряє:
 
 - Ollama API на `http://localhost:11434`
 - BGE-M3 server `/health` на `http://localhost:8765`
+
+Provider HTTP contracts покриті mocked contract tests і не потребують реальних моделей у CI.
+
+Provider HTTP calls мають timeout. Default:
+
+```text
+30000 ms
+```
+
+Для діагностики або тестів timeout можна перевизначити через env:
+
+```powershell
+$env:RMEM_PROVIDER_TIMEOUT_MS = "5000"
+```
 
 ### `rmem dev search trace <query>`
 
@@ -685,6 +744,20 @@ type RmemCommandError = {
 
 CLI встановлює non-zero exit code для `ok: false`.
 
+### Stable CLI contract
+
+Agent-facing commands мають залишатися JSON-only:
+
+- success: `ok: true`
+- error: `ok: false`, `code`, `message`
+- diagnostics: тільки під `rmem dev ...`
+- version metadata: `rmem --version`
+
+Package exports:
+
+- `rmem-cli` публікує executable `rmem`
+- `@rmem/core` публікує ESM entrypoint і TypeScript declarations
+
 ## Error codes
 
 Поточні stable error codes:
@@ -753,9 +826,51 @@ rmem dev notes rebuild
 rmem dev index rebuild
 ```
 
+## Validation matrix
+
+### Automated CI
+
+```bash
+npm test
+```
+
+Покриває:
+
+- public command workflows
+- edit/error contracts
+- provider HTTP contracts через mocked servers
+- golden fixtures
+- lightweight performance smoke
+- UTF-8 critical behavior
+
+Automated CI не потребує Ollama або BGE-M3.
+
+### Package dry-run
+
+```bash
+npm run pack:dry-run
+```
+
+Перевіряє npm package contents для `rmem-cli` і `@rmem/core`.
+
+### Manual real-model smoke
+
+```powershell
+npm run smoke:real-models
+```
+
+Потребує:
+
+- Ollama на `http://localhost:11434`
+- модель `qwen2.5:7b`
+- BGE-M3 server на `http://localhost:8765`
+
+Цей сценарій перевіряє real provider path, але не входить у normal CI.
+
 ## Поточні обмеження
 
 - Markdown validation перевіряє базову структуру: headings і fenced code blocks.
-- YAML parser підтримує контрактні структури config/frontmatter, але не є повною YAML бібліотекою.
+- YAML parser підтримує documented subset для config/frontmatter, але не є повною YAML бібліотекою.
 - LLM note compiler має grounding guard: негрунтований output відкидається на користь deterministic compiler.
-- Normal CI не має вимагати Ollama або BGE-M3; provider failures дають fallback warnings.
+- Normal CI не вимагає Ollama або BGE-M3; provider contracts тестуються mocked HTTP servers.
+- Real-model tests для Ollama/BGE-M3 залишаються manual smoke сценарієм.

@@ -40,8 +40,10 @@ export class OllamaLlmProvider implements LocalLlmProvider {
         task: LlmTask<TInput, TOutput>,
         input: TInput
     ): Promise<TOutput> {
+        const signal = AbortSignal.timeout(providerTimeoutMs())
         const response = await fetch(`${trimSlash(this.config.endpoint)}/api/generate`, {
             method: 'POST',
+            signal,
             headers: {
                 'Content-Type': 'application/json'
             },
@@ -77,6 +79,7 @@ export class OpenAiCompatibleLlmProvider implements LocalLlmProvider {
         task: LlmTask<TInput, TOutput>,
         input: TInput
     ): Promise<TOutput> {
+        const signal = AbortSignal.timeout(providerTimeoutMs())
         const headers: Record<string, string> = {
             'Content-Type': 'application/json'
         }
@@ -86,6 +89,7 @@ export class OpenAiCompatibleLlmProvider implements LocalLlmProvider {
 
         const response = await fetch(`${trimSlash(this.config.endpoint)}/chat/completions`, {
             method: 'POST',
+            signal,
             headers,
             body: JSON.stringify({
                 model: this.config.model,
@@ -123,8 +127,10 @@ export class FlagEmbeddingHttpProvider implements EmbeddingProvider {
     constructor(private readonly config: FlagEmbeddingProviderConfig) {}
 
     async embedTexts(texts: string[]): Promise<EmbeddingVector[]> {
+        const signal = AbortSignal.timeout(providerTimeoutMs())
         const response = await fetch(`${trimSlash(this.config.endpoint)}/embed`, {
             method: 'POST',
+            signal,
             headers: {
                 'Content-Type': 'application/json'
             },
@@ -212,7 +218,9 @@ export async function checkProviders(config: RmemConfig): Promise<ProviderHealth
 async function checkLlm(config: OllamaLlmProviderConfig | OpenAiCompatibleLlmProviderConfig): Promise<ProviderStatus> {
     try {
         if (config.type === 'ollama') {
-            const response = await fetch(`${trimSlash(config.endpoint)}/api/tags`)
+            const response = await fetch(`${trimSlash(config.endpoint)}/api/tags`, {
+                signal: AbortSignal.timeout(providerTimeoutMs())
+            })
             if (!response.ok) {
                 throw new Error(`${response.status} ${response.statusText}`)
             }
@@ -222,7 +230,10 @@ async function checkLlm(config: OllamaLlmProviderConfig | OpenAiCompatibleLlmPro
                 requestInit.headers = { Authorization: `Bearer ${config.apiKey}` }
             }
 
-            const response = await fetch(`${trimSlash(config.endpoint)}/models`, requestInit)
+            const response = await fetch(`${trimSlash(config.endpoint)}/models`, {
+                ...requestInit,
+                signal: AbortSignal.timeout(providerTimeoutMs())
+            })
             if (!response.ok) {
                 throw new Error(`${response.status} ${response.statusText}`)
             }
@@ -249,7 +260,9 @@ async function checkLlm(config: OllamaLlmProviderConfig | OpenAiCompatibleLlmPro
 
 async function checkEmbeddings(config: FlagEmbeddingProviderConfig): Promise<ProviderStatus> {
     try {
-        const response = await fetch(`${trimSlash(config.endpoint)}/health`)
+        const response = await fetch(`${trimSlash(config.endpoint)}/health`, {
+            signal: AbortSignal.timeout(providerTimeoutMs())
+        })
         if (!response.ok) {
             throw new Error(`${response.status} ${response.statusText}`)
         }
@@ -277,6 +290,20 @@ async function checkEmbeddings(config: FlagEmbeddingProviderConfig): Promise<Pro
 
 function trimSlash(value: string): string {
     return value.replace(/\/+$/, '')
+}
+
+function providerTimeoutMs(): number {
+    const raw = process.env.RMEM_PROVIDER_TIMEOUT_MS
+    if (raw === undefined) {
+        return 30_000
+    }
+
+    const parsed = Number(raw)
+    if (Number.isInteger(parsed) && parsed > 0) {
+        return parsed
+    }
+
+    return 30_000
 }
 
 function stripJsonFence(value: string): string {

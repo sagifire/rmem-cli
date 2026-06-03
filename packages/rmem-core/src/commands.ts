@@ -1,5 +1,5 @@
 import { mkdir, readdir } from 'node:fs/promises'
-import { dirname, extname, join } from 'node:path'
+import { dirname, extname, join, relative } from 'node:path'
 import type {
     CheckResponse,
     CommandResult,
@@ -22,7 +22,7 @@ import { hasManagedHeaderMismatch, replaceManagedHeader, stripManagedHeader } fr
 import { atomicWriteUtf8, loadRegistry, readUtf8File, resolveMemoryPath, saveRegistry, toRegistryDocumentPath } from './storage.js'
 import { generateDerivedNotes, generateLlmDerivedNotes, markNotesStale, validateGeneratedNote } from './notes.js'
 import { memoryPathReport, searchRegistry } from './search.js'
-import { buildVectorIndex, isVectorIndexFresh, MockEmbeddingProvider } from './embeddings.js'
+import { buildVectorIndex, isVectorIndexCompatible, isVectorIndexFresh, MockEmbeddingProvider } from './embeddings.js'
 import { checkProviders, createEmbeddingProvider, createLlmProvider } from './providers.js'
 
 export async function listCommand(root: string, pathInput?: string): Promise<CommandResult<ListResponse>> {
@@ -336,8 +336,9 @@ export async function checkCommand(root: string): Promise<CommandResult<CheckRes
     const issues: RmemWarning[] = []
     const documentIds = new Set<string>()
 
-    for await (const documentPath of listMarkdownFiles(join(root, config.memoryRoot))) {
-        const registryPath = toRegistryDocumentPath(documentPath.replace(`${join(root, config.memoryRoot)}\\`, ''))
+    const memoryRootPath = join(root, config.memoryRoot)
+    for await (const documentPath of listMarkdownFiles(memoryRootPath)) {
+        const registryPath = toRegistryDocumentPath(relative(memoryRootPath, documentPath))
         try {
             const content = normalizeLineEndings(await readUtf8File(documentPath))
             const parsed = parseDocumentMarkdown(content)
@@ -452,6 +453,26 @@ export async function checkCommand(root: string): Promise<CommandResult<CheckRes
         }
     }
 
+    const activeNotes = registry.notes.filter((note) => note.status === 'active')
+    if (activeNotes.length > 0 && !isVectorIndexFresh(registry.embeddings, registry.notes)) {
+        issues.push({
+            code: 'STALE_INDEX',
+            message: 'Vector index is missing or stale.',
+            details: { indexedNotes: registry.embeddings?.vectors.length ?? 0 }
+        })
+    } else if (activeNotes.length > 0 && registry.embeddings !== undefined && config.providers?.embeddings !== undefined && !isVectorIndexCompatible(registry.embeddings, config.providers.embeddings.type, config.providers.embeddings.model)) {
+        issues.push({
+            code: 'STALE_INDEX',
+            message: 'Vector index provider or model does not match current config.',
+            details: {
+                indexProvider: registry.embeddings.provider,
+                indexModel: registry.embeddings.model,
+                configProvider: config.providers.embeddings.type,
+                configModel: config.providers.embeddings.model
+            }
+        })
+    }
+
     return {
         ok: true,
         valid: issues.length === 0,
@@ -472,6 +493,8 @@ export async function searchCommand(root: string, query: string): Promise<Comman
         registry,
         config,
         queryVector: queryEmbedding.vector,
+        queryVectorProvider: queryEmbedding.provider,
+        queryVectorModel: queryEmbedding.model,
         warnings: queryEmbedding.warnings
     })
 }
@@ -635,6 +658,8 @@ export async function devSearchTraceCommand(root: string, query: string): Promis
         registry,
         config,
         queryVector: queryEmbedding.vector,
+        queryVectorProvider: queryEmbedding.provider,
+        queryVectorModel: queryEmbedding.model,
         warnings: queryEmbedding.warnings
     })
 
@@ -751,18 +776,26 @@ async function generateNotesBestEffort(input: {
     const llm = createLlmProvider(input.config)
     if (llm !== undefined) {
         try {
+            const notes = await generateLlmDerivedNotes({
+                documentPath: input.documentPath,
+                frontmatter: input.frontmatter,
+                places: input.places,
+                bodyByPlace: input.bodyByPlace,
+                existingNotes: input.existingNotes,
+                now: input.now,
+                llm: llm.provider,
+                generator: `${llm.providerName}:${llm.model}`
+            })
+            const groundedFallbacks = notes.filter((note) => note.generated.generator === 'deterministic-semantic-compiler:v1').length
             return {
-                notes: await generateLlmDerivedNotes({
-                    documentPath: input.documentPath,
-                    frontmatter: input.frontmatter,
-                    places: input.places,
-                    bodyByPlace: input.bodyByPlace,
-                    existingNotes: input.existingNotes,
-                    now: input.now,
-                    llm: llm.provider,
-                    generator: `${llm.providerName}:${llm.model}`
-                }),
-                warnings: []
+                notes,
+                warnings: groundedFallbacks > 0
+                    ? [{
+                        code: 'LLM_PROVIDER_FAILED',
+                        message: 'LLM output failed grounding checks for some notes; deterministic note compiler was used for those notes.',
+                        details: { fallbackNotes: groundedFallbacks }
+                    }]
+                    : []
             }
         } catch (error) {
             return {
@@ -862,6 +895,8 @@ async function rebuildVectorIndexBestEffort(config: RmemConfig, registry: Regist
 
 async function queryVectorBestEffort(config: RmemConfig, query: string): Promise<{
     vector: number[]
+    provider: string
+    model: string
     warnings: RmemWarning[]
 }> {
     const configured = createEmbeddingProvider(config)
@@ -869,8 +904,15 @@ async function queryVectorBestEffort(config: RmemConfig, query: string): Promise
 
     try {
         const vectors = await configured.provider.embedTexts([query])
+        const vector = vectors[0]
+        if (vector === undefined || vector.length === 0) {
+            throw new Error('Embedding provider returned an empty query vector.')
+        }
+
         return {
-            vector: vectors[0] ?? [],
+            vector,
+            provider: configured.providerName,
+            model: configured.model,
             warnings
         }
     } catch (error) {
@@ -885,6 +927,8 @@ async function queryVectorBestEffort(config: RmemConfig, query: string): Promise
     const vectors = await fallbackProvider.embedTexts([query])
     return {
         vector: vectors[0] ?? [],
+        provider: 'mock-deterministic-embedding',
+        model: 'deterministic-hash-v1',
         warnings
     }
 }

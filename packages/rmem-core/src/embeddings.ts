@@ -49,12 +49,27 @@ export async function buildVectorIndex(input: {
     const activeNotes = input.notes.filter((note) => note.status === 'active')
     const vectors = await input.provider.embedTexts(activeNotes.map((note) => note.retrievalText))
     const firstVector = vectors[0]
+    const dimensions = firstVector?.length ?? 0
+
+    if (vectors.length !== activeNotes.length) {
+        throw new Error(`Embedding provider returned ${vectors.length} vector(s) for ${activeNotes.length} text(s).`)
+    }
+
+    if (activeNotes.length > 0 && dimensions === 0) {
+        throw new Error('Embedding provider returned an empty vector.')
+    }
+
+    for (const vector of vectors) {
+        if (vector.length !== dimensions) {
+            throw new Error('Embedding provider returned vectors with inconsistent dimensions.')
+        }
+    }
 
     return {
         schemaVersion: 1,
         provider: input.providerName,
         model: input.model,
-        dimensions: firstVector?.length ?? 0,
+        dimensions,
         vectors: activeNotes.map((note, index) => ({
             noteId: note.id,
             vector: vectors[index] ?? [],
@@ -85,6 +100,13 @@ export function isVectorIndexFresh(index: VectorIndexState | undefined, notes: M
     }
 
     return true
+}
+
+export function isVectorIndexCompatible(index: VectorIndexState | undefined, providerName: string, model: string): boolean {
+    return index !== undefined
+        && index.provider === providerName
+        && index.model === model
+        && index.dimensions > 0
 }
 
 function tokenize(value: string): string[] {

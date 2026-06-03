@@ -1,8 +1,17 @@
 {
     "name": "@rmem/core",
     "version": "1.0.0",
+    "description": "Core contracts and services for document-oriented semantic project memory.",
     "type": "module",
+    "types": "./dist/index.d.ts",
     "exports": {
         ".": "./dist/index.js"
+    },
+    "files": [
+        "dist",
+        "package.json"
+    ],
+    "engines": {
+        "node": ">=22"
     }
 }

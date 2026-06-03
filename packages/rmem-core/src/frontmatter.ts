@@ -56,7 +56,13 @@ export function parseDocumentMarkdown(content: string): ParsedMarkdownDocument |
 
     const rawFrontmatter = content.slice(4, end)
     const body = content.slice(end + 5)
-    const parsed = parseYamlObject(rawFrontmatter)
+    let parsed: unknown
+    try {
+        parsed = parseYamlObject(rawFrontmatter)
+    } catch (error) {
+        return invalidFrontmatter(`Unsupported YAML syntax: ${String(error)}`)
+    }
+
     if (!isRecord(parsed)) {
         return invalidFrontmatter('Frontmatter must be an object.')
     }
@@ -284,6 +290,10 @@ export function parseYamlObject(input: string): unknown {
             continue
         }
 
+        if (rawLine.startsWith('\t')) {
+            throw new Error(`Tabs are not supported for indentation at line ${index + 1}.`)
+        }
+
         const indent = rawLine.match(/^ */)?.[0]?.length ?? 0
         const line = rawLine.trim()
 
@@ -299,18 +309,30 @@ export function parseYamlObject(input: string): unknown {
         const parent = stack[stack.length - 1]?.value
         if (line.startsWith('- ')) {
             if (!Array.isArray(parent)) {
-                continue
+                throw new Error(`Sequence item is not inside a sequence at line ${index + 1}.`)
             }
             parent.push(parseScalar(line.slice(2)))
             continue
         }
 
         const separator = line.indexOf(':')
-        if (separator === -1 || !isRecord(parent)) {
-            continue
+        if (separator === -1) {
+            throw new Error(`Missing key/value separator at line ${index + 1}.`)
+        }
+
+        if (!isRecord(parent)) {
+            throw new Error(`Mapping entry is not inside a mapping at line ${index + 1}.`)
         }
 
         const key = line.slice(0, separator).trim()
+        if (key.length === 0) {
+            throw new Error(`Empty mapping key at line ${index + 1}.`)
+        }
+
+        if (Object.hasOwn(parent, key)) {
+            throw new Error(`Duplicate mapping key "${key}" at line ${index + 1}.`)
+        }
+
         const rawValue = line.slice(separator + 1).trim()
         if (rawValue === '>' || rawValue === '|') {
             const blockLines: string[] = []
@@ -365,8 +387,16 @@ function parseScalar(value: string): unknown {
         return Number(value)
     }
 
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-        return value.slice(1, -1)
+    if (value.startsWith('"') && value.endsWith('"')) {
+        try {
+            return JSON.parse(value) as string
+        } catch {
+            return value.slice(1, -1)
+        }
+    }
+
+    if (value.startsWith("'") && value.endsWith("'")) {
+        return value.slice(1, -1).replace(/''/g, "'")
     }
 
     return value

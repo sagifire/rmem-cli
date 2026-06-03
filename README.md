@@ -14,6 +14,7 @@ rmem write <document-path> [--from <file>]
 rmem edit <document-path>
 rmem remove <document-path>
 rmem check
+rmem --version
 ```
 
 Agent-facing commands return structured JSON by default.
@@ -27,6 +28,7 @@ rmem dev docs parse <document-path>
 rmem dev index rebuild
 rmem dev embeddings status
 rmem dev links validate
+rmem dev providers check
 rmem dev search trace <query>
 ```
 
@@ -35,6 +37,15 @@ rmem dev search trace <query>
 ```bash
 npm install
 npm test
+npm run pack:dry-run
 ```
 
 The implementation uses strict TypeScript, validates UTF-8 reads, validates core Markdown structure, writes canonical documents atomically, generates managed headers from frontmatter, and supports provider contracts for Ollama LLM and a bundled Windows-friendly BGE-M3 FlagEmbedding server.
+
+Provider contracts, golden fixtures and a lightweight performance smoke are covered by automated tests. Normal CI does not require Ollama or BGE-M3.
+
+Manual real-model smoke on Windows:
+
+```powershell
+npm run smoke:real-models
+```

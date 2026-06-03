@@ -9,7 +9,9 @@
     "scripts": {
         "build": "tsc -b",
         "test": "npm run build && node --test dist-tests/*.test.js",
-        "check": "npm run build && npm run test"
+        "check": "npm run build && npm run test",
+        "pack:dry-run": "npm pack --workspaces --dry-run",
+        "smoke:real-models": "powershell -ExecutionPolicy Bypass -File tools/manual-real-model-smoke.ps1"
     },
     "devDependencies": {
         "@types/node": "^22.14.0",

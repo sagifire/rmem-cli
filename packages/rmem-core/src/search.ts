@@ -1,17 +1,23 @@
 import type { MemoryPathUnitReport, RegistryState, RmemConfig, SearchResponse, SearchResult } from './types.js'
-import { MockEmbeddingProvider, cosineSimilarity, embedText, isVectorIndexFresh } from './embeddings.js'
+import { MockEmbeddingProvider, cosineSimilarity, embedText, isVectorIndexCompatible, isVectorIndexFresh } from './embeddings.js'
 
 export async function searchRegistry(input: {
     query: string
     registry: RegistryState
     config: RmemConfig
     queryVector?: number[]
+    queryVectorProvider?: string
+    queryVectorModel?: string
     warnings?: SearchResponse['warnings']
 }): Promise<SearchResponse> {
     const terms = tokenize(input.query)
     const fallbackQueryEmbedding = embedText(input.query)
     const vectorByNote = new Map((input.registry.embeddings?.vectors ?? []).map((vector) => [vector.noteId, vector.vector]))
     const hasFreshVectorIndex = isVectorIndexFresh(input.registry.embeddings, input.registry.notes)
+    const hasCompatibleVectorIndex = input.queryVectorProvider !== undefined
+        && input.queryVectorModel !== undefined
+        && isVectorIndexCompatible(input.registry.embeddings, input.queryVectorProvider, input.queryVectorModel)
+    const canUseVectorIndex = hasFreshVectorIndex && hasCompatibleVectorIndex
     const scored = input.registry.notes
         .filter((note) => note.status !== 'archived')
         .map((note) => {
@@ -19,7 +25,7 @@ export async function searchRegistry(input: {
             const place = input.registry.places.find((candidate) => candidate.id === note.source.structuralPlaceId)
             const lexicalScore = scoreText(note.retrievalText, terms)
             const indexedVector = vectorByNote.get(note.id)
-            const denseScore = input.queryVector !== undefined && indexedVector !== undefined
+            const denseScore = canUseVectorIndex && input.queryVector !== undefined && indexedVector !== undefined
                 ? cosineSimilarity(input.queryVector, indexedVector)
                 : cosineSimilarity(fallbackQueryEmbedding, embedText(note.retrievalText))
             const graphBoost = note.links.length > 0 ? 0.1 : 0
@@ -117,9 +123,9 @@ export async function searchRegistry(input: {
             ...input.registry.notes.some((note) => note.status === 'stale')
                 ? [{ code: 'STALE_INDEX', message: 'Some notes are stale and search results may need rebuild.' }]
                 : [],
-            ...hasFreshVectorIndex
+            ...canUseVectorIndex
                 ? []
-                : [{ code: 'STALE_INDEX', message: 'Vector index is missing or stale; deterministic fallback embeddings were used.' }]
+                : [{ code: 'STALE_INDEX', message: 'Vector index is missing, stale, or provider-incompatible; deterministic fallback embeddings were used.' }]
         ]
     }
 }

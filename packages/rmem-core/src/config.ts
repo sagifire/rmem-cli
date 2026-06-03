@@ -98,10 +98,11 @@ function parseConfig(content: string, format: 'yaml' | 'json'): RmemConfig {
         throw new Error('indexing.noteRebuildMode must be sync or manual.')
     }
 
+    const areas = parseAreas(parsed.areas, defaultValue.areas)
     const config: RmemConfig = {
         schemaVersion: parsed.schemaVersion ?? 1,
         memoryRoot: parsed.memoryRoot ?? 'memory',
-        areas: parsed.areas ?? defaultValue.areas,
+        areas,
         indexing: {
             noteRebuildMode: noteRebuildMode ?? 'sync'
         }
@@ -113,6 +114,36 @@ function parseConfig(content: string, format: 'yaml' | 'json'): RmemConfig {
     }
 
     return config
+}
+
+function parseAreas(value: unknown, defaultAreas: RmemConfig['areas']): RmemConfig['areas'] {
+    if (value === undefined) {
+        return defaultAreas
+    }
+
+    if (!isRecord(value)) {
+        throw new Error('areas must be an object.')
+    }
+
+    const result: RmemConfig['areas'] = {}
+    for (const [key, area] of Object.entries(value)) {
+        if (!isRecord(area)) {
+            throw new Error(`areas.${key} must be an object.`)
+        }
+
+        const title = stringField(area.title, `areas.${key}.title`)
+        const parsedArea: RmemConfig['areas'][string] = { title }
+        if (typeof area.description === 'string') {
+            parsedArea.description = area.description
+        }
+        if (typeof area.parent === 'string') {
+            parsedArea.parent = area.parent
+        }
+
+        result[key] = parsedArea
+    }
+
+    return result
 }
 
 function serializeConfig(config: RmemConfig): string {

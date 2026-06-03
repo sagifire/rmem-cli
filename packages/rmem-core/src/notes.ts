@@ -7,6 +7,7 @@ type NoteSegment = {
     sourceSummary: string
     canonicalStatement: string
     retrievalSeed: string
+    usedFallback?: boolean
     type?: NoteType
     tags?: string[]
     aliases?: string[]
@@ -95,7 +96,9 @@ export async function generateLlmDerivedNotes(input: {
             segment,
             existingNotes: input.existingNotes,
             now: input.now,
-            generator: input.generator
+            generator: segment.usedFallback === true
+                ? 'deterministic-semantic-compiler:v1'
+                : input.generator
         }))
     }
 
@@ -202,12 +205,12 @@ function normalizeLlmSegment(
     const fallback = synthesizeSegment(content, frontmatter, place)
     const sourceQuote = stringValue(output.sourceQuote)
     if (sourceQuote === undefined || !content.includes(sourceQuote)) {
-        return fallback
+        return { ...fallback, usedFallback: true }
     }
 
     const canonicalStatement = stringValue(output.canonicalStatement)
     if (canonicalStatement !== undefined && !sourceQuote.includes(canonicalStatement.replace(/…$/, '').slice(0, 40))) {
-        return fallback
+        return { ...fallback, usedFallback: true }
     }
 
     const segment: NoteSegment = {
