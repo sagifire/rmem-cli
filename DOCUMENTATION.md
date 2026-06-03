@@ -598,7 +598,7 @@ rmem --version
 ```json
 {
     "ok": true,
-    "version": "1.1.0"
+    "version": "1.1.1"
 }
 ```
 

@@ -1,6 +1,6 @@
 ---
 name: memory-of-relics
-description: Document-oriented semantic project memory workflow powered by rmem-cli 1.1.0. Use for project tasks that require context from //memory, including architecture, rules, plans, tasks, docs, implementation decisions, and agent workflow requirements. If the user request is project-related and involves changes, planning, decisions, context, or implementation work, load this skill first.
+description: Document-oriented semantic project memory workflow powered by rmem-cli 1.1.1. Use for project tasks that require context from //memory, including architecture, rules, plans, tasks, docs, implementation decisions, and agent workflow requirements. If the user request is project-related and involves changes, planning, decisions, context, or implementation work, load this skill first.
 license: MIT
 ---
 
@@ -117,7 +117,7 @@ Expected version for this template:
 ```json
 {
     "ok": true,
-    "version": "1.1.0"
+    "version": "1.1.1"
 }
 ```
 

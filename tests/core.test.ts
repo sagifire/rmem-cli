@@ -21,6 +21,7 @@ import {
     searchCommand,
     searchRegistry,
     treeGenerateCommand,
+    treeRepairCommand,
     updateFolderCommand,
     writeCommand
 } from '../packages/rmem-core/dist/index.js'
@@ -289,6 +290,90 @@ test('memory folders use full path keys for duplicate segment names', async () =
     }
 })
 
+test('folder move supports logical-only folders and rejects self-subtree moves', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeOfflineConfig(root)
+        const created = await createFolderCommand(root, 'project/logical', {
+            description: 'Logical folder without physical directory.'
+        })
+        assert.equal(created.ok, true)
+
+        const moved = await moveFolderCommand(root, 'project/logical', 'project/moved-logical')
+        assert.equal(moved.ok, true)
+        assert.equal(moved.moved, true)
+        assert.equal(moved.affected.documents, 0)
+
+        const list = await listCommand(root, 'project')
+        assert.equal(list.ok, true)
+        assert.equal(list.items.some((item) => item.type === 'area' && item.key === 'project/moved-logical'), true)
+
+        const rejected = await moveFolderCommand(root, 'project/moved-logical', 'project/moved-logical/child')
+        assert.equal(isCommandError(rejected), true)
+        if (isCommandError(rejected)) {
+            assert.equal(rejected.code, 'INVALID_MEMORY_PATH')
+        }
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('folder remove archives unparsable UTF-8 documents before deleting originals', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/broken', {
+            description: 'Broken document folder.'
+        })
+        await writeCommand(root, 'broken/doc.md', '# Broken\n\nOriginal valid content.\n')
+        await writeFile(join(root, 'memory', 'broken', 'doc.md'), '#Broken\n\nNo frontmatter but still UTF-8.\n', 'utf8')
+
+        const removed = await removeFolderCommand(root, 'project/broken')
+        assert.equal(removed.ok, true)
+        assert.equal(removed.affected.documents, 1)
+
+        const archived = await readFile(join(root, '.rmem', 'archive', 'broken', 'doc.md'), 'utf8')
+        assert.equal(archived.includes('#Broken'), true)
+
+        await assert.rejects(
+            access(join(root, 'memory', 'broken', 'doc.md')),
+            (error: unknown) => error instanceof Error
+        )
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('tree repair rejects corrupted backup state', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeOfflineConfig(root)
+        await createFolderCommand(root, 'project/backup-test', {
+            description: 'Backup test folder.'
+        })
+        await writeFile(join(root, '.rmem', 'index', 'tree-index.json'), JSON.stringify({
+            schemaVersion: 1,
+            treeIndexPath: 'memory/tree-index.md',
+            folders: [{
+                path: ['project', 'broken'],
+                key: 'project/not-broken',
+                area: {
+                    title: 'Broken',
+                    description: 'Broken backup.'
+                }
+            }]
+        }, null, 4), 'utf8')
+
+        const repaired = await treeRepairCommand(root)
+        assert.equal(isCommandError(repaired), true)
+        if (isCommandError(repaired)) {
+            assert.equal(repaired.code, 'TREE_INDEX_INVALID')
+        }
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
 test('check detects registry drift and invalid Markdown', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rmem-'))
     try {
@@ -351,7 +436,7 @@ test('CLI returns version metadata', () => {
     assert.equal(result.status, 0)
     const parsed = JSON.parse(result.stdout) as { ok: boolean, version: string }
     assert.equal(parsed.ok, true)
-    assert.equal(parsed.version, '1.1.0')
+    assert.equal(parsed.version, '1.1.1')
 })
 
 test('frontmatter parser decodes quoted scalar escapes', () => {

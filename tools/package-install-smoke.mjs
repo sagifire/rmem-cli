@@ -39,7 +39,7 @@ if (!existsSync(rmemCli)) {
 }
 
 const version = runJson(process.execPath, [rmemCli, '--version'], appRoot)
-if (version.ok !== true || version.version !== '1.1.0') {
+if (version.ok !== true || version.version !== '1.1.1') {
     throw new Error(`Unexpected rmem --version output: ${JSON.stringify(version)}`)
 }
 

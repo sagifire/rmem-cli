@@ -4,6 +4,19 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), а versioning має відповідати правилам із `docs/RELEASE.md`.
 
+## [1.1.1] - 2026-06-03
+
+### Fixed
+
+- Fixed `rmem folder move` for folders that exist only in `memory/tree-index.md` before any physical document write.
+- Fixed `rmem folder move` validation to reject moving a folder into its own subtree.
+- Fixed safe `rmem folder remove` archiving so unparsable UTF-8 documents are copied to `.rmem/archive` before original files are removed.
+- Fixed `rmem tree repair` to validate `.rmem/index/tree-index.json` before restoring `memory/tree-index.md`.
+
+### Tests
+
+- Added regression tests for logical-only folder moves, self-subtree move rejection, safe removal of unparsable documents, and corrupted tree-index backup rejection.
+
 ## [1.1.0] - 2026-06-03
 
 ### Added

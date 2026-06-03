@@ -1,4 +1,4 @@
-import { mkdir, rename, rm } from 'node:fs/promises'
+import { access, mkdir, rename, rm } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import type {
     CheckResponse,
@@ -399,6 +399,15 @@ export async function moveFolderCommand(root: string, fromInput: string, toInput
 
     const fromKey = areaKeyFromPath(fromPath)
     const toKey = areaKeyFromPath(toPath)
+    if (fromKey !== toKey && memoryPathStartsWith(toPath, fromPath)) {
+        return commandError({
+            code: 'INVALID_MEMORY_PATH',
+            message: 'Memory folder cannot be moved into its own subtree.',
+            details: { from: fromPath, to: toPath },
+            suggestion: 'Move the folder to a sibling or external parent folder.'
+        })
+    }
+
     if (fromKey !== toKey && config.areas[toKey] !== undefined) {
         return commandError({
             code: 'MEMORY_FOLDER_ALREADY_EXISTS',
@@ -418,47 +427,57 @@ export async function moveFolderCommand(root: string, fromInput: string, toInput
 
     const fromDirectory = areaDirectoryFromPath(root, config.memoryRoot, fromPath)
     const toDirectory = areaDirectoryFromPath(root, config.memoryRoot, toPath)
-    if (fromDirectory !== toDirectory) {
-        await rename(fromDirectory, toDirectory)
-    }
-
-    const movedArea = makeArea(toPath, request.description ?? source.description ?? '', request.title ?? source.title)
-    const movedRecords = tree.folders.map((record) => {
-        if (!memoryPathStartsWith(record.path, fromPath)) {
-            return record
+    try {
+        if (fromDirectory !== toDirectory && await pathExists(fromDirectory)) {
+            await mkdir(dirname(toDirectory), { recursive: true })
+            await rename(fromDirectory, toDirectory)
         }
 
-        const suffix = record.path.slice(fromPath.length)
-        const nextPath = [...toPath, ...suffix]
-        const nextKey = areaKeyFromPath(nextPath)
-        const nextArea = record.key === fromKey
-            ? movedArea
-            : makeArea(nextPath, record.area.description ?? '', record.area.title)
-        return {
-            path: nextPath,
-            key: nextKey,
-            area: nextArea
-        }
-    })
-    await saveTreeIndex(root, config.memoryRoot, movedRecords)
-    const folder = areaReport(root, config.memoryRoot, toPath, movedArea)
+        const movedArea = makeArea(toPath, request.description ?? source.description ?? '', request.title ?? source.title)
+        const movedRecords = tree.folders.map((record) => {
+            if (!memoryPathStartsWith(record.path, fromPath)) {
+                return record
+            }
 
-    const movedConfig: RmemConfig = {
-        ...config,
-        areas: areasFromTree({
-            schemaVersion: 1,
-            treeIndexPath: tree.treeIndexPath,
-            folders: movedRecords
+            const suffix = record.path.slice(fromPath.length)
+            const nextPath = [...toPath, ...suffix]
+            const nextKey = areaKeyFromPath(nextPath)
+            const nextArea = record.key === fromKey
+                ? movedArea
+                : makeArea(nextPath, record.area.description ?? '', record.area.title)
+            return {
+                path: nextPath,
+                key: nextKey,
+                area: nextArea
+            }
         })
-    }
-    const affected = await rewriteDocumentsForMovedFolder(root, movedConfig, fromPath, toPath)
-    return {
-        ok: true,
-        folder,
-        changed: true,
-        moved: true,
-        affected,
-        warnings: []
+        await saveTreeIndex(root, config.memoryRoot, movedRecords)
+        const folder = areaReport(root, config.memoryRoot, toPath, movedArea)
+
+        const movedConfig: RmemConfig = {
+            ...config,
+            areas: areasFromTree({
+                schemaVersion: 1,
+                treeIndexPath: tree.treeIndexPath,
+                folders: movedRecords
+            })
+        }
+        const affected = await rewriteDocumentsForMovedFolder(root, movedConfig, fromPath, toPath)
+        return {
+            ok: true,
+            folder,
+            changed: true,
+            moved: true,
+            affected,
+            warnings: []
+        }
+    } catch (error) {
+        return commandError({
+            code: 'WRITE_FAILED',
+            message: 'Failed to move memory folder safely.',
+            details: String(error),
+            suggestion: 'Check filesystem permissions and ensure the target path is available.'
+        })
     }
 }
 
@@ -487,23 +506,32 @@ export async function removeFolderCommand(root: string, pathInput: string, reque
     }
 
     const directory = areaDirectoryFromPath(root, config.memoryRoot, path)
-    if (request.deleteFiles === true) {
-        await rm(directory, { recursive: true, force: true })
-    }
+    try {
+        if (request.deleteFiles === true) {
+            await rm(directory, { recursive: true, force: true })
+        }
 
-    const remaining = tree.folders.filter((record) => !memoryPathStartsWith(record.path, path))
-    await saveTreeIndex(root, config.memoryRoot, remaining)
-    const affected = request.deleteFiles === true
-        ? await cleanupRegistryForRemovedFolder(root, path)
-        : await archiveRegistryForRemovedFolder(root, config, path)
+        const remaining = tree.folders.filter((record) => !memoryPathStartsWith(record.path, path))
+        await saveTreeIndex(root, config.memoryRoot, remaining)
+        const affected = request.deleteFiles === true
+            ? await cleanupRegistryForRemovedFolder(root, path)
+            : await archiveRegistryForRemovedFolder(root, config, path)
 
-    return {
-        ok: true,
-        folder: areaReport(root, config.memoryRoot, path, area),
-        changed: true,
-        removed: true,
-        affected,
-        warnings: []
+        return {
+            ok: true,
+            folder: areaReport(root, config.memoryRoot, path, area),
+            changed: true,
+            removed: true,
+            affected,
+            warnings: []
+        }
+    } catch (error) {
+        return commandError({
+            code: 'WRITE_FAILED',
+            message: 'Failed to remove memory folder safely.',
+            details: String(error),
+            suggestion: 'Check filesystem permissions and archive directory.'
+        })
     }
 }
 
@@ -672,19 +700,18 @@ async function archiveRegistryForRemovedFolder(root: string, config: RmemConfig,
     for (const record of affectedRecords) {
         const fullPath = resolveMemoryPath(root, config.memoryRoot, record.path)
         const archivePath = join(root, '.rmem', 'archive', record.path)
-        try {
-            const parsed = parseDocumentMarkdown(await readUtf8File(fullPath))
-            if (!isCommandError(parsed)) {
-                parsed.frontmatter.rmem.status = 'archived'
-                parsed.frontmatter.rmem.updatedAt = new Date().toISOString()
-                parsed.frontmatter.rmem.revision += 1
-                const archivedBody = replaceManagedHeader(parsed.body, parsed.frontmatter)
-                await atomicWriteUtf8(archivePath, serializeDocument(parsed.frontmatter, archivedBody))
-            }
-            await rm(fullPath, { force: true })
-        } catch {
-            await mkdir(dirname(archivePath), { recursive: true })
+        const content = await readUtf8File(fullPath)
+        const parsed = parseDocumentMarkdown(content)
+        if (!isCommandError(parsed)) {
+            parsed.frontmatter.rmem.status = 'archived'
+            parsed.frontmatter.rmem.updatedAt = new Date().toISOString()
+            parsed.frontmatter.rmem.revision += 1
+            const archivedBody = replaceManagedHeader(parsed.body, parsed.frontmatter)
+            await atomicWriteUtf8(archivePath, serializeDocument(parsed.frontmatter, archivedBody))
+        } else {
+            await atomicWriteUtf8(archivePath, content)
         }
+        await rm(fullPath, { force: true })
         record.archived = true
         record.document.status = 'archived'
     }
@@ -740,6 +767,15 @@ function samePath(left: string[], right: string[]): boolean {
 
 function memoryPathStartsWith(path: string[], prefix: string[]): boolean {
     return prefix.every((unit, index) => path[index] === unit)
+}
+
+async function pathExists(path: string): Promise<boolean> {
+    try {
+        await access(path)
+        return true
+    } catch {
+        return false
+    }
 }
 
 export async function editCommand(root: string, documentPath: string, request: EditDocumentRequest): Promise<CommandResult<WriteDocumentResponse>> {

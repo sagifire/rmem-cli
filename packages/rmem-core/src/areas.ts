@@ -149,9 +149,18 @@ export async function saveTreeIndexBackup(root: string, state: TreeIndexState): 
 
 export async function loadTreeIndexBackup(root: string): Promise<TreeIndexState | RmemCommandError> {
     try {
-        const parsed = JSON.parse(await readUtf8File(join(root, treeIndexBackupPath))) as TreeIndexState
-        return parsed
+        const parsed = JSON.parse(await readUtf8File(join(root, treeIndexBackupPath))) as unknown
+        return validateTreeIndexBackup(parsed)
     } catch (error) {
+        if (error instanceof Error && error.message.startsWith('Invalid tree index backup:')) {
+            return commandError({
+                code: 'TREE_INDEX_INVALID',
+                message: 'Tree index backup has invalid format.',
+                details: error.message,
+                suggestion: 'Repair memory/tree-index.md manually or run rmem tree generate for a new skeleton.'
+            })
+        }
+
         return commandError({
             code: 'TREE_INDEX_NOT_FOUND',
             message: 'Tree index backup was not found.',
@@ -307,8 +316,86 @@ function uniquePaths(paths: string[][]): string[][] {
     return result
 }
 
+function validateTreeIndexBackup(value: unknown): TreeIndexState {
+    if (!isRecord(value)) {
+        throw new Error('Invalid tree index backup: root must be an object.')
+    }
+
+    if (value.schemaVersion !== 1) {
+        throw new Error('Invalid tree index backup: schemaVersion must be 1.')
+    }
+
+    if (typeof value.treeIndexPath !== 'string' || value.treeIndexPath.length === 0) {
+        throw new Error('Invalid tree index backup: treeIndexPath must be a non-empty string.')
+    }
+
+    if (!Array.isArray(value.folders)) {
+        throw new Error('Invalid tree index backup: folders must be an array.')
+    }
+
+    const folders: TreeIndexRecord[] = []
+    const seen = new Set<string>()
+    for (const folder of value.folders) {
+        if (!isRecord(folder) || !Array.isArray(folder.path) || typeof folder.key !== 'string' || !isRecord(folder.area)) {
+            throw new Error('Invalid tree index backup: folder records must contain path, key and area.')
+        }
+
+        const path = parseBackupPath(folder.path)
+        const pathError = validateAreaPath(path)
+        if (pathError !== undefined) {
+            throw new Error(`Invalid tree index backup: ${pathError}`)
+        }
+
+        const key = areaKeyFromPath(path)
+        if (key !== folder.key) {
+            throw new Error('Invalid tree index backup: folder key does not match path.')
+        }
+        if (seen.has(key)) {
+            throw new Error(`Invalid tree index backup: duplicate folder path ${key}.`)
+        }
+        seen.add(key)
+
+        const title = folder.area.title
+        const description = folder.area.description
+        if (typeof title !== 'string' || title.length === 0) {
+            throw new Error('Invalid tree index backup: area title must be a non-empty string.')
+        }
+        if (description !== undefined && typeof description !== 'string') {
+            throw new Error('Invalid tree index backup: area description must be a string.')
+        }
+
+        const area = makeArea(path, description ?? '', title)
+        folders.push({ path, key, area })
+    }
+
+    if (!seen.has('project')) {
+        throw new Error('Invalid tree index backup: project root folder is missing.')
+    }
+
+    return {
+        schemaVersion: 1,
+        treeIndexPath: value.treeIndexPath,
+        folders
+    }
+}
+
+function parseBackupPath(value: unknown[]): string[] {
+    const path: string[] = []
+    for (const unit of value) {
+        if (typeof unit !== 'string') {
+            throw new Error('Invalid tree index backup: path units must be strings.')
+        }
+        path.push(unit)
+    }
+    return path
+}
+
 function isCommandErrorLike(value: unknown): value is RmemCommandError {
     return typeof value === 'object' && value !== null && 'ok' in value && value.ok === false
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
