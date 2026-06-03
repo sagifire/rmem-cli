@@ -828,6 +828,8 @@ rmem dev index rebuild
 
 ## Validation matrix
 
+Архітектурні межі модулів, production-ready інваріанти та refactor rules описані окремо в `docs/ARCHITECTURE.md`.
+
 ### Automated CI
 
 ```bash
@@ -851,7 +853,45 @@ Automated CI не потребує Ollama або BGE-M3.
 npm run pack:dry-run
 ```
 
-Перевіряє npm package contents для `rmem-cli` і `@rmem/core`.
+Перевіряє npm package contents для `rmem-cli` і `@rmem/core`. Команда використовує Node wrapper `tools/package-dry-run.mjs` і npm cache у `.runtime/npm-cache`, щоб не залежати від user-level npm cache.
+
+### Package install smoke
+
+```bash
+npm run smoke:package
+```
+
+Створює tarballs для `rmem-cli` і `@rmem/core` через `tools/package-install-smoke.mjs`, встановлює їх у тимчасовий test app під `.runtime/package-install-smoke`, перевіряє installed `rmem` binary, виконує `rmem --version`, `rmem write` і `rmem check`.
+
+Цей сценарій перевіряє реальний npm delivery path без Ollama/BGE-M3 і без Docker.
+
+Сценарій є cross-platform і призначений для Windows/Linux CI.
+
+### Full project check
+
+```bash
+npm run check
+```
+
+Виконує automated tests, package install smoke і package dry-run.
+
+CI workflow у `.github/workflows/ci.yml` запускає `npm run check` на `windows-latest` і `ubuntu-latest` з Node.js 22.
+
+### Release workflow
+
+```text
+.github/workflows/release.yml
+```
+
+Release workflow запускається вручну через `workflow_dispatch`.
+
+- `publish=false` виконує `npm run check` і `npm publish --dry-run` для обох packages.
+- `publish=true` додатково публікує `@rmem/core`, потім `rmem-cli`, з `--provenance`.
+- Для publish потрібен GitHub secret `NPM_TOKEN`.
+
+Повний checklist описаний у `docs/RELEASE.md`.
+
+Історія релізів ведеться в `CHANGELOG.md`.
 
 ### Manual real-model smoke
 

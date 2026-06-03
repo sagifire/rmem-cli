@@ -9,8 +9,9 @@
     "scripts": {
         "build": "tsc -b",
         "test": "npm run build && node --test dist-tests/*.test.js",
-        "check": "npm run build && npm run test",
-        "pack:dry-run": "npm pack --workspaces --dry-run",
+        "check": "npm run test && npm run smoke:package && npm run pack:dry-run",
+        "pack:dry-run": "node tools/package-dry-run.mjs",
+        "smoke:package": "node tools/package-install-smoke.mjs",
         "smoke:real-models": "powershell -ExecutionPolicy Bypass -File tools/manual-real-model-smoke.ps1"
     },
     "devDependencies": {

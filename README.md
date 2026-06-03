@@ -37,15 +37,28 @@ rmem dev search trace <query>
 ```bash
 npm install
 npm test
+npm run smoke:package
 npm run pack:dry-run
+npm run check
 ```
 
 The implementation uses strict TypeScript, validates UTF-8 reads, validates core Markdown structure, writes canonical documents atomically, generates managed headers from frontmatter, and supports provider contracts for Ollama LLM and a bundled Windows-friendly BGE-M3 FlagEmbedding server.
 
 Provider contracts, golden fixtures and a lightweight performance smoke are covered by automated tests. Normal CI does not require Ollama or BGE-M3.
 
+`npm run smoke:package` packs both workspaces, installs the generated tarballs into `.runtime/package-install-smoke`, verifies the installed `rmem` binary, writes a memory document and runs `rmem check`.
+
+The package smoke and dry-run scripts are Node-based and run on Windows and Linux CI.
+
 Manual real-model smoke on Windows:
 
 ```powershell
 npm run smoke:real-models
 ```
+
+## Architecture
+
+- Detailed command/config documentation: `DOCUMENTATION.md`
+- Architecture, module boundaries and production matrix: `docs/ARCHITECTURE.md`
+- Release checklist and publish gates: `docs/RELEASE.md`
+- Release history: `CHANGELOG.md`
