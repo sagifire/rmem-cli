@@ -887,7 +887,8 @@ Release workflow запускається вручну через `workflow_disp
 
 - `publish=false` виконує `npm run check` і `npm publish --dry-run` для обох packages.
 - `publish=true` додатково публікує `@rmem/core`, потім `rmem-cli`, з `--provenance`.
-- Для publish потрібен GitHub secret `NPM_TOKEN`.
+- Для publish потрібен GitHub secret `NPM_TOKEN`: granular npm access token з publish/write permissions і bypass 2FA, якщо 2FA увімкнено для publish.
+- Для першої публікації `@rmem/core` npm scope `@rmem` має існувати, а token має мати право публікації в цьому scope. `E404 Scope not found` означає, що потрібно створити/отримати scope або змінити package name.
 
 Повний checklist описаний у `docs/RELEASE.md`.
 

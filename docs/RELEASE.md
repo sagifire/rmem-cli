@@ -13,6 +13,20 @@
 - `CHANGELOG.md` містить запис для версії, що публікується.
 - Немає пошкодженого UTF-8 або mojibake в документації, tests і fixtures.
 
+## npm registry prerequisites
+
+Перед першим `publish=true` maintainer має підготувати npm registry state:
+
+- npm scope `@rmem` має існувати як npm organization або user scope.
+- Account/token, який використовується в GitHub Actions, має право публікувати packages у scope `@rmem`.
+- GitHub secret `NPM_TOKEN` має бути granular access token з publish/write permissions для `@rmem/core` і `rmem-cli`.
+- Якщо npm account має 2FA для publish, token має бути створений з bypass 2FA, інакше registry поверне `E403`.
+- `repository.url` у root і workspace `package.json` має збігатися з GitHub repository з provenance: `https://github.com/sagifire/rmem-cli`.
+
+Помилка `E404 Scope not found` для `@rmem/core` означає, що npm registry не має scope `@rmem` або authenticated account не має до нього доступу. Це не виправляється GitHub Actions workflow-ом: потрібно створити/отримати npm scope або змінити package name.
+
+Помилка `E422 Error verifying sigstore provenance bundle` з повідомленням про `repository.url` означає, що npm package metadata не збігається з GitHub repository, з якого запускається workflow.
+
 ## Required validation
 
 ```bash

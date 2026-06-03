@@ -3,6 +3,10 @@
     "version": "1.0.0",
     "description": "Core contracts and services for document-oriented semantic project memory.",
     "type": "module",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/sagifire/rmem-cli"
+    },
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {

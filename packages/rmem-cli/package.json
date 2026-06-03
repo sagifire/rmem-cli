@@ -3,6 +3,10 @@
     "version": "1.0.0",
     "description": "Document-oriented semantic project memory CLI.",
     "type": "module",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/sagifire/rmem-cli"
+    },
     "bin": {
         "rmem": "./dist/main.js"
     },

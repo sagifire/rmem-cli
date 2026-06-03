@@ -3,6 +3,10 @@
     "version": "1.0.0",
     "private": true,
     "type": "module",
+    "repository": {
+        "type": "git",
+        "url": "https://github.com/sagifire/rmem-cli"
+    },
     "workspaces": [
         "packages/*"
     ],
