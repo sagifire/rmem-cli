@@ -2,5 +2,19 @@ node_modules/
 packages/*/dist/
 dist-tests/
 *.tsbuildinfo
+
+# Local rmem workspaces and generated memory state
 .rmem/
 memory/
+
+# Project-local runtimes, model caches and diagnostics
+.runtime/
+*.log
+
+# Local environment files
+.env
+.env.*
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

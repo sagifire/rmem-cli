@@ -2,7 +2,7 @@
 
 `rmem-cli` is a TypeScript CLI for document-first semantic project memory.
 
-Canonical knowledge lives in Markdown documents. Notes, links, structural places, registry data and search reports are derived projections that can be rebuilt from documents.
+Canonical knowledge lives in Markdown documents. Notes, links, structural places, registry data and search reports are derived projections that can be rebuilt from documents. Runtime configuration is stored in `.rmem/config.yaml`.
 
 ## Public Commands
 
@@ -37,4 +37,4 @@ npm install
 npm test
 ```
 
-The implementation uses strict TypeScript, validates UTF-8 reads, writes canonical documents atomically, generates managed headers from frontmatter, and keeps mocked LLM/embedding behavior behind domain contracts for deterministic local tests.
+The implementation uses strict TypeScript, validates UTF-8 reads, validates core Markdown structure, writes canonical documents atomically, generates managed headers from frontmatter, and supports provider contracts for Ollama LLM and a bundled Windows-friendly BGE-M3 FlagEmbedding server.

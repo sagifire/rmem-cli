@@ -1,4 +1,4 @@
-import { mkdir, readdir, rm } from 'node:fs/promises'
+import { mkdir, readdir } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import type {
     CheckResponse,
@@ -17,11 +17,12 @@ import { ensureConfig, loadConfig } from './config.js'
 import { createDefaultFrontmatter, parseDocumentMarkdown, serializeDocument } from './frontmatter.js'
 import { documentIdFromPath } from './ids.js'
 import { normalizeLineEndings, sha256 } from './hash.js'
-import { extractStructuralPlaces } from './markdown.js'
+import { extractStructuralPlaces, validateMarkdown } from './markdown.js'
 import { hasManagedHeaderMismatch, replaceManagedHeader, stripManagedHeader } from './managed-header.js'
 import { atomicWriteUtf8, loadRegistry, readUtf8File, resolveMemoryPath, saveRegistry, toRegistryDocumentPath } from './storage.js'
-import { generateMockNotes, markNotesStale } from './notes.js'
+import { generateDerivedNotes, markNotesStale, validateGeneratedNote } from './notes.js'
 import { memoryPathReport, searchRegistry } from './search.js'
+import { checkProviders } from './providers.js'
 
 export async function listCommand(root: string, pathInput?: string): Promise<CommandResult<ListResponse>> {
     const config = await loadConfig(root)
@@ -158,6 +159,11 @@ export async function writeCommand(root: string, documentPath: string, contentIn
         return parsed
     }
 
+    const markdownError = validateMarkdown(parsed.body)
+    if (markdownError !== undefined) {
+        return markdownError
+    }
+
     if (!created && existing !== undefined) {
         const existingParsed = parseDocumentMarkdown(existing)
         if (!isCommandError(existingParsed)) {
@@ -173,6 +179,11 @@ export async function writeCommand(root: string, documentPath: string, contentIn
     const finalParsed = parseDocumentMarkdown(finalContent)
     if (isCommandError(finalParsed)) {
         return finalParsed
+    }
+
+    const finalMarkdownError = validateMarkdown(finalParsed.body)
+    if (finalMarkdownError !== undefined) {
+        return finalMarkdownError
     }
 
     try {
@@ -255,13 +266,22 @@ export async function removeCommand(root: string, documentPath: string): Promise
     const registry = await loadRegistry(root)
     const registryPath = toRegistryDocumentPath(documentPath)
     const record = registry.documents.find((candidate) => candidate.path === registryPath)
-    const fullPath = resolveMemoryPath(root, config.memoryRoot, documentPath)
     const archivePath = join(root, '.rmem', 'archive', registryPath)
 
     try {
         await mkdir(dirname(archivePath), { recursive: true })
-        await atomicWriteUtf8(archivePath, read.content)
-        await rm(fullPath)
+        const parsed = parseDocumentMarkdown(read.content)
+        if (isCommandError(parsed)) {
+            return parsed
+        }
+
+        parsed.frontmatter.rmem.status = 'archived'
+        parsed.frontmatter.rmem.updatedAt = new Date().toISOString()
+        parsed.frontmatter.rmem.revision += 1
+        const archivedBody = replaceManagedHeader(parsed.body, parsed.frontmatter)
+        const archivedContent = serializeDocument(parsed.frontmatter, archivedBody)
+        await atomicWriteUtf8(archivePath, archivedContent)
+        await atomicWriteUtf8(resolveMemoryPath(root, config.memoryRoot, documentPath), archivedContent)
 
         if (record !== undefined) {
             record.archived = true
@@ -282,7 +302,8 @@ export async function removeCommand(root: string, documentPath: string): Promise
             ok: true,
             document: {
                 ...read.document,
-                status: 'archived'
+                status: 'archived',
+                revision: parsed.frontmatter.rmem.revision
             },
             created: false,
             changed: true,
@@ -324,6 +345,12 @@ export async function checkCommand(root: string): Promise<CommandResult<CheckRes
                 continue
             }
 
+            const markdownError = validateMarkdown(parsed.body)
+            if (markdownError !== undefined) {
+                issues.push({ code: markdownError.code, message: markdownError.message, details: { path: registryPath } })
+                continue
+            }
+
             if (documentIds.has(parsed.frontmatter.rmem.documentId)) {
                 issues.push({
                     code: 'DUPLICATE_DOCUMENT_ID',
@@ -347,6 +374,24 @@ export async function checkCommand(root: string): Promise<CommandResult<CheckRes
                         code: 'INVALID_MEMORY_PATH',
                         message: 'Document references unknown memory path area.',
                         details: { path: registryPath, unit }
+                    })
+                }
+            }
+
+            const registryRecord = registry.documents.find((record) => record.path === registryPath)
+            if (registryRecord === undefined) {
+                issues.push({
+                    code: 'STALE_INDEX',
+                    message: 'Document is missing from registry.',
+                    details: { path: registryPath }
+                })
+            } else {
+                const currentHash = hashDocument(parsed.frontmatter, parsed.body)
+                if (registryRecord.documentHash !== currentHash) {
+                    issues.push({
+                        code: 'STALE_INDEX',
+                        message: 'Registry document hash does not match file content.',
+                        details: { path: registryPath }
                     })
                 }
             }
@@ -374,6 +419,34 @@ export async function checkCommand(root: string): Promise<CommandResult<CheckRes
                 code: 'STALE_INDEX',
                 message: 'Stale note found.',
                 details: { noteId: note.id }
+            })
+        }
+
+        const place = registry.places.find((candidate) => candidate.id === note.source.structuralPlaceId)
+        if (place === undefined && note.status !== 'archived') {
+            issues.push({
+                code: 'BROKEN_LINK',
+                message: 'Note references a missing structural place.',
+                details: { noteId: note.id, structuralPlaceId: note.source.structuralPlaceId }
+            })
+        }
+
+        if (place !== undefined && place.sourceHash !== note.source.sourceHash && note.status === 'active') {
+            issues.push({
+                code: 'STALE_INDEX',
+                message: 'Active note source hash no longer matches structural place.',
+                details: { noteId: note.id, structuralPlaceId: note.source.structuralPlaceId }
+            })
+        }
+    }
+
+    for (const place of registry.places) {
+        const document = registry.documents.find((record) => record.document.documentId === place.documentId)
+        if (document === undefined) {
+            issues.push({
+                code: 'BROKEN_LINK',
+                message: 'Structural place references a missing document.',
+                details: { placeId: place.id, documentId: place.documentId }
             })
         }
     }
@@ -418,11 +491,12 @@ export async function devRebuildCommand(root: string): Promise<CommandResult<{ o
             body: parsed.body
         })
         const bodyByPlace = bodyByPlaceId(parsed.body, places)
-        const notes = generateMockNotes({
+        const notes = generateDerivedNotes({
             documentPath: record.path,
             frontmatter: parsed.frontmatter,
             places,
             bodyByPlace,
+            existingNotes: registry.notes.filter((note) => note.source.documentId !== parsed.frontmatter.rmem.documentId),
             now: new Date().toISOString()
         })
         rebuiltNotes += notes.length
@@ -552,6 +626,15 @@ export async function devSearchTraceCommand(root: string, query: string): Promis
     }
 }
 
+export async function devProvidersCheckCommand(root: string): Promise<CommandResult<Awaited<ReturnType<typeof checkProviders>>>> {
+    const config = await loadConfig(root)
+    if (isCommandError(config)) {
+        return config
+    }
+
+    return checkProviders(config)
+}
+
 async function updateRegistryAfterWrite(
     root: string,
     config: RmemConfig,
@@ -586,13 +669,14 @@ async function updateRegistryAfterWrite(
     let rebuiltNotes = 0
     if (!options.staleOnly && config.indexing.noteRebuildMode === 'sync') {
         const bodyByPlace = bodyByPlaceId(body, places)
-        const notes = generateMockNotes({
+        const notes = generateDerivedNotes({
             documentPath,
             frontmatter,
             places,
             bodyByPlace,
+            existingNotes: registry.notes.filter((note) => note.source.documentId !== frontmatter.rmem.documentId),
             now: new Date().toISOString()
-        })
+        }).filter(validateGeneratedNote)
         registry.notes = registry.notes.filter((note) => note.source.documentId !== frontmatter.rmem.documentId)
         registry.notes.push(...notes)
         rebuiltNotes = notes.length

@@ -1,7 +1,48 @@
-import type { StructuralPlace } from './types.js'
+import type { RmemCommandError, StructuralPlace } from './types.js'
 import { placeId } from './ids.js'
 import { sha256 } from './hash.js'
 import { stripManagedHeader } from './managed-header.js'
+import { commandError } from './errors.js'
+
+export function validateMarkdown(content: string): RmemCommandError | undefined {
+    const body = stripManagedHeader(content)
+    const lines = body.split('\n')
+    let fencedBlockMarker: string | undefined
+
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index] ?? ''
+        const fence = line.match(/^(```+|~~~+)/)?.[1]
+        if (fence !== undefined) {
+            if (fencedBlockMarker === undefined) {
+                fencedBlockMarker = fence.slice(0, 3)
+            } else if (fence.startsWith(fencedBlockMarker)) {
+                fencedBlockMarker = undefined
+            }
+        }
+
+        const heading = line.match(/^(#{1,6})(.*)$/)
+        if (fencedBlockMarker === undefined && heading !== null) {
+            const text = heading[2]
+            if (text === undefined || !text.startsWith(' ') || text.trim().length === 0) {
+                return commandError({
+                    code: 'INVALID_MARKDOWN',
+                    message: `Invalid Markdown heading at line ${index + 1}.`,
+                    suggestion: 'Use headings in the form "# Heading".'
+                })
+            }
+        }
+    }
+
+    if (fencedBlockMarker !== undefined) {
+        return commandError({
+            code: 'INVALID_MARKDOWN',
+            message: 'Markdown contains an unclosed fenced code block.',
+            suggestion: 'Close every ``` or ~~~ fenced code block.'
+        })
+    }
+
+    return undefined
+}
 
 export function extractStructuralPlaces(input: {
     documentId: string

@@ -56,7 +56,7 @@ export function parseDocumentMarkdown(content: string): ParsedMarkdownDocument |
 
     const rawFrontmatter = content.slice(4, end)
     const body = content.slice(end + 5)
-    const parsed = parseSimpleYaml(rawFrontmatter)
+    const parsed = parseYamlObject(rawFrontmatter)
     if (!isRecord(parsed)) {
         return invalidFrontmatter('Frontmatter must be an object.')
     }
@@ -271,7 +271,7 @@ function validateFrontmatter(input: Record<string, unknown>): RmemDocumentFrontm
     return result
 }
 
-function parseSimpleYaml(input: string): unknown {
+export function parseYamlObject(input: string): unknown {
     const root: Record<string, unknown> = {}
     const stack: { indent: number, value: Record<string, unknown> | unknown[] }[] = [
         { indent: -1, value: root }
@@ -312,6 +312,31 @@ function parseSimpleYaml(input: string): unknown {
 
         const key = line.slice(0, separator).trim()
         const rawValue = line.slice(separator + 1).trim()
+        if (rawValue === '>' || rawValue === '|') {
+            const blockLines: string[] = []
+            let blockIndex = index + 1
+            while (blockIndex < lines.length) {
+                const blockLine = lines[blockIndex]
+                if (blockLine === undefined) {
+                    break
+                }
+
+                const blockIndent = blockLine.match(/^ */)?.[0]?.length ?? 0
+                if (blockLine.trim().length > 0 && blockIndent <= indent) {
+                    break
+                }
+
+                blockLines.push(blockLine.slice(Math.min(blockIndent, indent + 2)))
+                blockIndex += 1
+            }
+
+            parent[key] = rawValue === '>'
+                ? blockLines.map((item) => item.trim()).filter((item) => item.length > 0).join(' ')
+                : blockLines.join('\n').trimEnd()
+            index = blockIndex - 1
+            continue
+        }
+
         if (rawValue.length > 0) {
             parent[key] = parseScalar(rawValue)
             continue

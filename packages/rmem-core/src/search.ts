@@ -1,4 +1,5 @@
 import type { MemoryPathUnitReport, RegistryState, RmemConfig, SearchResponse, SearchResult } from './types.js'
+import { cosineSimilarity, embedText } from './embeddings.js'
 
 export function searchRegistry(input: {
     query: string
@@ -6,15 +7,19 @@ export function searchRegistry(input: {
     config: RmemConfig
 }): SearchResponse {
     const terms = tokenize(input.query)
+    const queryEmbedding = embedText(input.query)
     const scored = input.registry.notes
         .filter((note) => note.status !== 'archived')
         .map((note) => {
             const document = input.registry.documents.find((candidate) => candidate.document.documentId === note.source.documentId)
             const place = input.registry.places.find((candidate) => candidate.id === note.source.structuralPlaceId)
-            const score = scoreText(note.retrievalText, terms)
+            const lexicalScore = scoreText(note.retrievalText, terms)
+            const denseScore = cosineSimilarity(queryEmbedding, embedText(note.retrievalText))
+            const graphBoost = note.links.length > 0 ? 0.1 : 0
+            const score = lexicalScore + denseScore + graphBoost
             return { note, document, place, score }
         })
-        .filter((item) => item.document !== undefined && item.score > 0)
+        .filter((item) => item.document !== undefined && item.score > 0.05)
         .sort((left, right) => right.score - left.score)
         .slice(0, 5)
 
@@ -43,9 +48,10 @@ export function searchRegistry(input: {
             },
             memoryPath: memoryPathReport(document.document.memoryPath, input.config),
             linkedKnowledge: item.note.links.map((link) => {
+                const linkedNote = input.registry.notes.find((note) => note.id === link.targetNoteId)
                 const linked = {
                     noteId: link.targetNoteId,
-                    title: link.targetNoteId,
+                    title: linkedNote?.title ?? link.targetNoteId,
                     type: link.type
                 }
                 if (link.reason !== undefined) {

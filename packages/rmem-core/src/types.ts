@@ -203,6 +203,31 @@ export type RmemConfig = {
     indexing: {
         noteRebuildMode: 'sync' | 'manual'
     }
+    providers?: ProviderConfig
+}
+
+export type ProviderConfig = {
+    llm?: OllamaLlmProviderConfig | OpenAiCompatibleLlmProviderConfig
+    embeddings?: FlagEmbeddingProviderConfig
+}
+
+export type OllamaLlmProviderConfig = {
+    type: 'ollama'
+    endpoint: string
+    model: string
+}
+
+export type OpenAiCompatibleLlmProviderConfig = {
+    type: 'openai-compatible'
+    endpoint: string
+    model: string
+    apiKey?: string
+}
+
+export type FlagEmbeddingProviderConfig = {
+    type: 'flagembedding'
+    endpoint: string
+    model: string
 }
 
 export type RegistryState = {

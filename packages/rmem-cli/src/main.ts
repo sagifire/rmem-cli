@@ -7,6 +7,7 @@ import {
     devEmbeddingsStatusCommand,
     devLinksValidateCommand,
     devNotesListCommand,
+    devProvidersCheckCommand,
     devRebuildCommand,
     devSearchTraceCommand,
     editCommand,
@@ -40,6 +41,7 @@ async function main(): Promise<void> {
                 'dev index rebuild',
                 'dev embeddings status',
                 'dev links validate',
+                'dev providers check',
                 'dev search trace <query>'
             ]
         })
@@ -73,7 +75,11 @@ async function main(): Promise<void> {
 
     if (command === 'edit') {
         const documentPath = requiredArg(args[1], 'document-path')
-        const request = JSON.parse(await readStdin()) as Parameters<typeof editCommand>[2]
+        const request = parseEditRequest(await readStdin())
+        if (isEditRequestError(request)) {
+            await output(request)
+            return
+        }
         await output(await editCommand(root, documentPath, request))
         return
     }
@@ -115,6 +121,11 @@ async function main(): Promise<void> {
 
     if (command === 'dev' && args[1] === 'links' && args[2] === 'validate') {
         await output(await devLinksValidateCommand(root))
+        return
+    }
+
+    if (command === 'dev' && args[1] === 'providers' && args[2] === 'check') {
+        await output(await devProvidersCheckCommand(root))
         return
     }
 
@@ -166,6 +177,39 @@ function decodeUtf8(bytes: Uint8Array): string {
     return decoder.decode(bytes)
 }
 
+function parseEditRequest(input: string): Parameters<typeof editCommand>[2] | {
+    ok: false
+    code: 'INVALID_EDIT_REQUEST'
+    message: string
+    details?: unknown
+    suggestion: string
+} {
+    try {
+        return JSON.parse(input) as Parameters<typeof editCommand>[2]
+    } catch (error) {
+        return {
+            ok: false,
+            code: 'INVALID_EDIT_REQUEST',
+            message: 'Edit request stdin must be valid JSON.',
+            details: String(error),
+            suggestion: 'Pass JSON with optional documentHash and edits array.'
+        }
+    }
+}
+
+function isEditRequestError(value: unknown): value is {
+    ok: false
+    code: 'INVALID_EDIT_REQUEST'
+    message: string
+    details?: unknown
+    suggestion: string
+} {
+    return typeof value === 'object'
+        && value !== null
+        && 'ok' in value
+        && (value as { ok: unknown }).ok === false
+}
+
 main().catch((error: unknown) => {
     if (error instanceof TypeError) {
         printJson({
@@ -184,7 +228,7 @@ main().catch((error: unknown) => {
         code: 'INVALID_CONFIG',
         message: 'CLI command failed.',
         details: String(error),
-        suggestion: 'Check command arguments and input JSON.'
+        suggestion: 'Check command arguments.'
     })
     process.exitCode = 1
 })

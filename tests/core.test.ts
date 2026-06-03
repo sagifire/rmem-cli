@@ -1,14 +1,17 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import { spawnSync } from 'node:child_process'
 import {
     checkCommand,
+    devLinksValidateCommand,
     editCommand,
     isCommandError,
     listCommand,
     readCommand,
+    removeCommand,
     searchCommand,
     writeCommand
 } from '../packages/rmem-core/dist/index.js'
@@ -20,6 +23,7 @@ test('document workflow writes, reads, searches, edits and checks memory', async
         assert.equal(write.ok, true)
         assert.equal(write.created, true)
         assert.equal(write.affected.rebuiltNotes > 0, true)
+        await access(join(root, '.rmem', 'config.yaml'))
 
         const read = await readCommand(root, 'architecture/memory.md')
         assert.equal(read.ok, true)
@@ -114,6 +118,82 @@ test('managed header is generated from frontmatter only', async () => {
         const content = await readFile(fullPath, 'utf8')
         assert.equal(content.includes('**Ревізія:** 1'), true)
         assert.equal(content.includes('Body'), true)
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('write rejects invalid Markdown before canonical write', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        const result = await writeCommand(root, 'broken.md', '#Broken\n\nBody\n')
+        assert.equal(isCommandError(result), true)
+        if (isCommandError(result)) {
+            assert.equal(result.code, 'INVALID_MARKDOWN')
+        }
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('remove archives without deleting canonical document file', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeCommand(root, 'archive/me.md', '# Archive Me\n\nBody\n')
+        const result = await removeCommand(root, 'archive/me.md')
+        assert.equal(result.ok, true)
+        const content = await readFile(join(root, 'memory', 'archive', 'me.md'), 'utf8')
+        assert.equal(content.includes('status: archived'), true)
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('check detects registry drift and invalid Markdown', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeCommand(root, 'drift.md', '# Drift\n\nOriginal\n')
+        await writeFile(join(root, 'memory', 'drift.md'), '#Bad\n\nChanged\n', 'utf8')
+        const check = await checkCommand(root)
+        assert.equal(check.ok, true)
+        assert.equal(check.valid, false)
+        assert.equal(check.issues.some((issue) => issue.code === 'INVALID_FRONTMATTER' || issue.code === 'INVALID_MARKDOWN' || issue.code === 'STALE_INDEX'), true)
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('derived notes create related links and link validation passes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeCommand(root, 'a.md', '# Shared Architecture\n\nVector index stores project memory retrieval data.\n')
+        await writeCommand(root, 'b.md', '# Related Architecture\n\nVector index stores related project memory signals.\n')
+        const search = await searchCommand(root, 'related retrieval signals')
+        assert.equal(search.ok, true)
+        assert.equal(search.results.length > 0, true)
+        assert.equal(search.results.some((result) => result.linkedKnowledge.length > 0), true)
+
+        const links = await devLinksValidateCommand(root)
+        assert.equal(links.ok, true)
+        assert.equal(links.valid, true)
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('CLI returns INVALID_EDIT_REQUEST for malformed edit JSON', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeCommand(root, 'cli.md', '# CLI\n\nBody\n')
+        const cli = join(process.cwd(), 'packages', 'rmem-cli', 'dist', 'main.js')
+        const result = spawnSync(process.execPath, [cli, 'edit', 'cli.md'], {
+            cwd: root,
+            input: '{bad json',
+            encoding: 'utf8'
+        })
+        assert.equal(result.status, 1)
+        const parsed = JSON.parse(result.stdout) as { code: string }
+        assert.equal(parsed.code, 'INVALID_EDIT_REQUEST')
     } finally {
         await rm(root, { recursive: true, force: true })
     }
