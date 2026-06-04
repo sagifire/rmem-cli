@@ -14,6 +14,7 @@ import {
     devRebuildCommand,
     devSearchTraceCommand,
     editCommand,
+    initCommand,
     moveFolderCommand,
     isCommandError,
     listCommand,
@@ -28,24 +29,28 @@ import {
 } from '@rmem/core'
 
 async function main(): Promise<void> {
-    const args = process.argv.slice(2)
+    const rawArgs = process.argv.slice(2)
+    const jsonOutput = rawArgs.includes('--json')
+    const args = rawArgs.filter((arg) => arg !== '--json')
     const command = args[0]
     const root = process.cwd()
     const version = await readCliVersion()
+    const outputFormat: OutputFormat = jsonOutput ? 'json' : 'yaml'
 
     if (command === '--version' || command === '-v') {
-        printJson({
+        printOutput({
             ok: true,
             version
-        })
+        }, outputFormat)
         return
     }
 
     if (command === undefined || command === '--help' || command === '-h') {
-        printJson({
+        printOutput({
             ok: true,
             version,
             commands: [
+                'init',
                 'search <query>',
                 'list [memory-path]',
                 'read <document-path>',
@@ -68,22 +73,27 @@ async function main(): Promise<void> {
                 'dev providers check',
                 'dev search trace <query>'
             ]
-        })
+        }, outputFormat)
+        return
+    }
+
+    if (command === 'init') {
+        await output(await initCommand(root), outputFormat)
         return
     }
 
     if (command === 'search') {
-        await output(await searchCommand(root, args.slice(1).join(' ')))
+        await output(await searchCommand(root, args.slice(1).join(' ')), outputFormat)
         return
     }
 
     if (command === 'list') {
-        await output(await listCommand(root, args[1]))
+        await output(await listCommand(root, args[1]), outputFormat)
         return
     }
 
     if (command === 'read') {
-        await output(await readCommand(root, requiredArg(args[1], 'document-path')))
+        await output(await readCommand(root, requiredArg(args[1], 'document-path')), outputFormat, { readMarkdown: true })
         return
     }
 
@@ -93,7 +103,7 @@ async function main(): Promise<void> {
         const content = fromIndex === -1
             ? await readStdin()
             : decodeUtf8(await readFile(requiredArg(args[fromIndex + 1], 'file')))
-        await output(await writeCommand(root, documentPath, content))
+        await output(await writeCommand(root, documentPath, content), outputFormat)
         return
     }
 
@@ -101,52 +111,52 @@ async function main(): Promise<void> {
         const documentPath = requiredArg(args[1], 'document-path')
         const request = parseEditRequest(await readStdin())
         if (isEditRequestError(request)) {
-            await output(request)
+            await output(request, outputFormat)
             return
         }
-        await output(await editCommand(root, documentPath, request))
+        await output(await editCommand(root, documentPath, request), outputFormat)
         return
     }
 
     if (command === 'remove') {
-        await output(await removeCommand(root, requiredArg(args[1], 'document-path')))
+        await output(await removeCommand(root, requiredArg(args[1], 'document-path')), outputFormat)
         return
     }
 
     if (command === 'folder' && args[1] === 'create') {
-        await output(await createFolderCommand(root, requiredArg(args[2], 'memory-path'), folderWriteRequest(args)))
+        await output(await createFolderCommand(root, requiredArg(args[2], 'memory-path'), folderWriteRequest(args)), outputFormat)
         return
     }
 
     if (command === 'folder' && args[1] === 'update') {
-        await output(await updateFolderCommand(root, requiredArg(args[2], 'memory-path'), folderWriteRequest(args)))
+        await output(await updateFolderCommand(root, requiredArg(args[2], 'memory-path'), folderWriteRequest(args)), outputFormat)
         return
     }
 
     if (command === 'folder' && args[1] === 'move') {
-        await output(await moveFolderCommand(root, requiredArg(args[2], 'from-memory-path'), requiredArg(args[3], 'to-memory-path'), folderMoveRequest(args)))
+        await output(await moveFolderCommand(root, requiredArg(args[2], 'from-memory-path'), requiredArg(args[3], 'to-memory-path'), folderMoveRequest(args)), outputFormat)
         return
     }
 
     if (command === 'folder' && args[1] === 'remove') {
         await output(await removeFolderCommand(root, requiredArg(args[2], 'memory-path'), {
             deleteFiles: args.includes('--delete-files')
-        }))
+        }), outputFormat)
         return
     }
 
     if (command === 'tree' && args[1] === 'generate') {
-        await output(await treeGenerateCommand(root))
+        await output(await treeGenerateCommand(root), outputFormat)
         return
     }
 
     if (command === 'tree' && args[1] === 'repair') {
-        await output(await treeRepairCommand(root))
+        await output(await treeRepairCommand(root), outputFormat)
         return
     }
 
     if (command === 'check') {
-        await output(await checkCommand(root))
+        await output(await checkCommand(root), outputFormat)
         return
     }
 
@@ -190,24 +200,147 @@ async function main(): Promise<void> {
         return
     }
 
-    printJson({
+    printOutput({
         ok: false,
         code: 'INVALID_CONFIG',
         message: `Unknown command: ${command}`,
         suggestion: 'Use one of the public rmem commands or rmem dev commands.'
-    })
+    }, outputFormat)
     process.exitCode = 2
 }
 
-async function output(value: unknown): Promise<void> {
-    printJson(value)
+type OutputFormat = 'json' | 'yaml'
+
+async function output(value: unknown, format: OutputFormat = 'json', options: { readMarkdown?: boolean } = {}): Promise<void> {
+    if (options.readMarkdown === true && format === 'yaml' && isReadDocumentOutput(value)) {
+        printReadMarkdown(value)
+    } else {
+        printOutput(value, format)
+    }
+
     if (isCommandError(value)) {
         process.exitCode = 1
     }
 }
 
+function printOutput(value: unknown, format: OutputFormat): void {
+    if (format === 'json') {
+        printJson(value)
+        return
+    }
+
+    process.stdout.write(`${toYaml(value)}\n`)
+}
+
 function printJson(value: unknown): void {
     process.stdout.write(`${JSON.stringify(value, null, 4)}\n`)
+}
+
+function printReadMarkdown(value: {
+    ok: true
+    document: unknown
+    content: string
+    documentHash: string
+    warnings: unknown[]
+}): void {
+    const metadata = {
+        ok: value.ok,
+        document: value.document,
+        documentHash: value.documentHash,
+        warnings: value.warnings
+    }
+    process.stdout.write(`${toYaml(metadata)}\n\n--- markdown ---\n${value.content}\n`)
+}
+
+function isReadDocumentOutput(value: unknown): value is {
+    ok: true
+    document: unknown
+    content: string
+    documentHash: string
+    warnings: unknown[]
+} {
+    return typeof value === 'object'
+        && value !== null
+        && (value as { ok?: unknown }).ok === true
+        && typeof (value as { content?: unknown }).content === 'string'
+        && 'document' in value
+        && 'documentHash' in value
+        && Array.isArray((value as { warnings?: unknown }).warnings)
+}
+
+function toYaml(value: unknown, indent = 0): string {
+    const prefix = ' '.repeat(indent)
+
+    if (Array.isArray(value)) {
+        if (value.length === 0) {
+            return '[]'
+        }
+
+        return value.map((item) => {
+            if (isPlainObject(item) || Array.isArray(item)) {
+                return `${prefix}- ${toYaml(item, indent + 2).trimStart()}`
+            }
+
+            return `${prefix}- ${yamlScalar(item, indent + 2)}`
+        }).join('\n')
+    }
+
+    if (isPlainObject(value)) {
+        const entries = Object.entries(value)
+        if (entries.length === 0) {
+            return '{}'
+        }
+
+        return entries.map(([key, item]) => {
+            if (isPlainObject(item) || Array.isArray(item)) {
+                const serialized = toYaml(item, indent + 2)
+                if (serialized === '[]' || serialized === '{}') {
+                    return `${prefix}${key}: ${serialized}`
+                }
+
+                return `${prefix}${key}:\n${serialized}`
+            }
+
+            return `${prefix}${key}: ${yamlScalar(item, indent + 2)}`
+        }).join('\n')
+    }
+
+    return `${prefix}${yamlScalar(value, indent)}`
+}
+
+function yamlScalar(value: unknown, indent: number): string {
+    if (value === null) {
+        return 'null'
+    }
+
+    if (typeof value === 'boolean' || typeof value === 'number') {
+        return String(value)
+    }
+
+    if (typeof value !== 'string') {
+        return yamlScalar(JSON.stringify(value), indent)
+    }
+
+    if (value.length === 0) {
+        return '""'
+    }
+
+    if (value.includes('\n')) {
+        const blockIndent = ' '.repeat(indent)
+        return `|-\n${value.split('\n').map((line) => `${blockIndent}${line}`).join('\n')}`
+    }
+
+    if (/^[A-Za-z0-9_./@:-]+$/u.test(value) && !/^(true|false|null)$/u.test(value)) {
+        return value
+    }
+
+    return JSON.stringify(value)
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object'
+        && value !== null
+        && !Array.isArray(value)
 }
 
 function requiredArg(value: string | undefined, name: string): string {

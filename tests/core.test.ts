@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+﻿import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import assert from 'node:assert/strict'
@@ -10,6 +10,7 @@ import {
     devLinksValidateCommand,
     editCommand,
     generateLlmDerivedNotes,
+    initCommand,
     isCommandError,
     listCommand,
     loadConfig,
@@ -273,6 +274,33 @@ test('tree index gates memory operations and can be generated explicitly', async
     }
 })
 
+test('init creates config and tree index idempotently', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await mkdir(join(root, 'memory', 'rules'), { recursive: true })
+
+        const initialized = await initCommand(root)
+        assert.equal(initialized.ok, true)
+        assert.equal(initialized.created, true)
+        assert.equal(initialized.treeIndexPath, 'memory/tree-index.md')
+        assert.equal(initialized.folders.some((folder) => folder.key === 'project'), true)
+        assert.equal(initialized.folders.some((folder) => folder.key === 'project/rules'), true)
+        assert.equal(initialized.warnings.some((warning) => warning.code === 'MEMORY_FOLDER_DESCRIPTION_EMPTY'), true)
+
+        const repeated = await initCommand(root)
+        assert.equal(repeated.ok, true)
+        assert.equal(repeated.created, false)
+        assert.deepEqual(repeated.warnings, [])
+
+        const check = await checkCommand(root)
+        assert.equal(check.ok, true)
+        assert.equal(check.valid, false)
+        assert.equal(check.issues.some((issue) => issue.code === 'MEMORY_FOLDER_DESCRIPTION_EMPTY'), true)
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
 test('memory folders use full path keys for duplicate segment names', async () => {
     const root = await mkdtemp(join(tmpdir(), 'rmem-'))
     try {
@@ -425,7 +453,7 @@ test('CLI returns INVALID_EDIT_REQUEST for malformed edit JSON', async () => {
         await writeOfflineConfig(root)
         await writeCommand(root, 'cli.md', '# CLI\n\nBody\n')
         const cli = join(process.cwd(), 'packages', 'rmem-cli', 'dist', 'main.js')
-        const result = spawnSync(process.execPath, [cli, 'edit', 'cli.md'], {
+        const result = spawnSync(process.execPath, [cli, 'edit', 'cli.md', '--json'], {
             cwd: root,
             input: '{bad json',
             encoding: 'utf8'
@@ -438,16 +466,71 @@ test('CLI returns INVALID_EDIT_REQUEST for malformed edit JSON', async () => {
     }
 })
 
-test('CLI returns version metadata', () => {
+test('CLI returns YAML version metadata by default', () => {
     const cli = join(process.cwd(), 'packages', 'rmem-cli', 'dist', 'main.js')
     const result = spawnSync(process.execPath, [cli, '--version'], {
         encoding: 'utf8'
     })
 
     assert.equal(result.status, 0)
+    assert.match(result.stdout, /^ok: true$/m)
+    assert.match(result.stdout, /^version: 1\.1\.3$/m)
+})
+
+test('CLI returns JSON when requested', () => {
+    const cli = join(process.cwd(), 'packages', 'rmem-cli', 'dist', 'main.js')
+    const result = spawnSync(process.execPath, [cli, '--version', '--json'], {
+        encoding: 'utf8'
+    })
+
+    assert.equal(result.status, 0)
     const parsed = JSON.parse(result.stdout) as { ok: boolean, version: string }
     assert.equal(parsed.ok, true)
-    assert.equal(parsed.version, '1.1.2')
+    assert.equal(parsed.version, '1.1.3')
+})
+
+test('CLI init bootstraps project memory', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        const cli = join(process.cwd(), 'packages', 'rmem-cli', 'dist', 'main.js')
+        const result = spawnSync(process.execPath, [cli, 'init', '--json'], {
+            cwd: root,
+            encoding: 'utf8'
+        })
+
+        assert.equal(result.status, 0)
+        const parsed = JSON.parse(result.stdout) as { ok: boolean, created: boolean, treeIndexPath: string }
+        assert.equal(parsed.ok, true)
+        assert.equal(parsed.created, true)
+        assert.equal(parsed.treeIndexPath, 'memory/tree-index.md')
+        await access(join(root, '.rmem', 'config.yaml'))
+        await access(join(root, 'memory', 'tree-index.md'))
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
+})
+
+test('CLI read returns YAML metadata with raw Markdown by default', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rmem-'))
+    try {
+        await writeOfflineConfig(root)
+        await writeCommand(root, 'guide/read-format.md', '# Read Format\n\nДокумент без JSON escaping.\n')
+        const cli = join(process.cwd(), 'packages', 'rmem-cli', 'dist', 'main.js')
+        const result = spawnSync(process.execPath, [cli, 'read', 'guide/read-format.md'], {
+            cwd: root,
+            encoding: 'utf8'
+        })
+
+        assert.equal(result.status, 0)
+        assert.match(result.stdout, /^ok: true$/m)
+        assert.match(result.stdout, /^documentHash: [a-f0-9]{64}$/m)
+        assert.equal(result.stdout.includes('\\"'), false)
+        assert.equal(result.stdout.includes('--- markdown ---'), true)
+        assert.equal(result.stdout.includes('# Read Format'), true)
+        assert.equal(result.stdout.includes('Документ без JSON escaping.'), true)
+    } finally {
+        await rm(root, { recursive: true, force: true })
+    }
 })
 
 test('frontmatter parser decodes quoted scalar escapes', () => {
@@ -732,6 +815,63 @@ test('LLM canonical paraphrase is normalized without provider fallback', async (
     assert.equal(notes.length, 1)
     assert.equal(notes[0]?.generated.generator, 'ollama:qwen2.5:7b')
     assert.equal(notes[0]?.canonicalStatement, 'Agents must use rmem search before changing project memory.')
+})
+
+test('LLM source quote with normalized whitespace remains grounded', async () => {
+    const sourceContent = [
+        'The WebBoard project stores technical requirements in project memory.',
+        '',
+        'Agents must update documentation after changing requirements.'
+    ].join('\n')
+
+    const notes = await generateLlmDerivedNotes({
+        documentPath: 'documentation/requirements/webboard-technical-assignment.md',
+        frontmatter: {
+            title: 'WebBoard Requirements',
+            tags: [],
+            rmem: {
+                schemaVersion: 1,
+                documentId: 'doc_webboard_requirements',
+                kind: 'overview',
+                status: 'draft',
+                createdAt: '2026-06-03T00:00:00.000Z',
+                updatedAt: '2026-06-03T00:00:00.000Z',
+                revision: 1,
+                memoryPath: ['project', 'documentation', 'requirements'],
+                language: 'en'
+            }
+        },
+        places: [{
+            id: 'place_requirements',
+            documentId: 'doc_webboard_requirements',
+            documentPath: 'documentation/requirements/webboard-technical-assignment.md',
+            headingPath: ['Requirements'],
+            title: 'Requirements',
+            level: 1,
+            orderIndex: 0,
+            sourceHash: 'source'
+        }],
+        bodyByPlace: new Map([['place_requirements', sourceContent]]),
+        existingNotes: [],
+        now: '2026-06-03T00:00:00.000Z',
+        generator: 'ollama:qwen2.5:7b',
+        llm: {
+            async generateJson<TInput, TOutput>() {
+                const output = {
+                    title: 'WebBoard requirements memory',
+                    sourceQuote: 'The WebBoard project stores technical requirements in project memory. Agents must update documentation after changing requirements.',
+                    sourceSummary: 'WebBoard requirements are stored in project memory.',
+                    canonicalStatement: 'Agents must update documentation after changing requirements.'
+                }
+                return output as TOutput
+            }
+        }
+    })
+
+    assert.equal(notes.length, 1)
+    assert.equal(notes[0]?.generated.generator, 'ollama:qwen2.5:7b')
+    assert.equal(notes[0]?.source.sourceQuote, sourceContent)
+    assert.equal(notes[0]?.canonicalStatement, 'Agents must update documentation after changing requirements.')
 })
 
 async function writeOfflineConfig(root: string): Promise<void> {

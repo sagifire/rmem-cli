@@ -8,6 +8,7 @@ import type {
     FolderRemoveRequest,
     FolderResponse,
     FolderWriteRequest,
+    InitResponse,
     ListResponse,
     ReadDocumentResponse,
     RmemConfig,
@@ -255,6 +256,39 @@ export async function writeCommand(root: string, documentPath: string, contentIn
             details: String(error),
             suggestion: 'Check file permissions and available disk space.'
         })
+    }
+}
+
+export async function initCommand(root: string): Promise<CommandResult<InitResponse>> {
+    const config = await ensureBaseConfig(root)
+    const existing = await loadTreeIndex(root, config.memoryRoot)
+    if (!isCommandError(existing)) {
+        return {
+            ok: true,
+            created: false,
+            treeIndexPath: existing.treeIndexPath,
+            folders: existing.folders.map((record) => areaReport(root, config.memoryRoot, record.path, record.area)),
+            warnings: []
+        }
+    }
+
+    if (existing.code !== 'TREE_INDEX_NOT_FOUND') {
+        return existing
+    }
+
+    const tree = await generateTreeIndexFromFilesystem(root, config.memoryRoot)
+    return {
+        ok: true,
+        created: true,
+        treeIndexPath: tree.treeIndexPath,
+        folders: tree.folders.map((record) => areaReport(root, config.memoryRoot, record.path, record.area)),
+        warnings: [
+            {
+                code: 'MEMORY_FOLDER_DESCRIPTION_EMPTY',
+                message: 'Generated tree-index.md contains empty folder descriptions.',
+                details: { count: tree.folders.length }
+            }
+        ]
     }
 }
 

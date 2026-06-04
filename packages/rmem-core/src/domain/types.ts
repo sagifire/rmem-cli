@@ -416,6 +416,8 @@ export type TreeGenerateResponse = {
     warnings: RmemWarning[]
 }
 
+export type InitResponse = TreeGenerateResponse
+
 export type TreeRepairResponse = {
     ok: true
     repaired: boolean

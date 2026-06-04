@@ -1,6 +1,6 @@
 ---
 name: memory-of-relics
-description: Document-oriented semantic project memory workflow powered by rmem-cli 1.1.2. Use for project tasks that require context from //memory, including architecture, rules, plans, tasks, docs, implementation decisions, and agent workflow requirements. If the user request is project-related and involves changes, planning, decisions, context, or implementation work, load this skill first.
+description: Document-oriented semantic project memory workflow powered by rmem-cli 1.1.3. Use for project tasks that require context from //memory, including architecture, rules, plans, tasks, docs, implementation decisions, and agent workflow requirements. If the user request is project-related and involves changes, planning, decisions, context, or implementation work, load this skill first.
 license: MIT
 ---
 
@@ -114,18 +114,40 @@ Always start by checking the CLI when unsure:
 
 Expected version for this template:
 
-```json
-{
-    "ok": true,
-    "version": "1.1.2"
-}
+```yaml
+ok: true
+version: 1.1.3
 ```
+
+Agent-facing commands return compact YAML by default. Add `--json` only when a tool or script must parse the old JSON response shape.
+
+## Runtime Expectations
+
+Do not impose short time limits on commands that change project memory state. State-changing commands can trigger synchronous semantic indexing, note generation, local LLM calls, embedding generation, and vector index rebuilds.
+
+State-changing commands include:
+
+```bash
+<rmem> init
+<rmem> write <document-path> [--from <file>]
+<rmem> edit <document-path>
+<rmem> remove <document-path>
+<rmem> folder create <memory-path> --description <text>
+<rmem> folder update <memory-path> --description <text>
+<rmem> folder move <from-memory-path> <to-memory-path>
+<rmem> folder remove <memory-path>
+<rmem> tree generate
+<rmem> tree repair
+```
+
+If an execution environment requires a timeout parameter, use a generous timeout for these commands rather than a short default. A slow response is expected when local models are active; treat timeout as an operational failure only after the command had enough time to finish indexing.
 
 ## Public Commands
 
 Normal agent-facing commands:
 
 ```bash
+<rmem> init
 <rmem> search <query>
 <rmem> list [memory-path]
 <rmem> read <document-path>
@@ -143,6 +165,22 @@ Normal agent-facing commands:
 ```
 
 Diagnostic commands live under `rmem dev ...`. Do not use them in normal workflow unless the user explicitly asks for diagnostics or the task is about `rmem-cli` development.
+
+## Output Format
+
+Default output is compact YAML:
+
+```yaml
+ok: true
+```
+
+Use `--json` when strict JSON is required:
+
+```bash
+<rmem> check --json
+```
+
+`rmem read` is special in default mode: it returns YAML metadata first, then `--- markdown ---`, then the raw canonical Markdown document. Do not treat the marker as part of the document content.
 
 ## Path Parameters
 
@@ -198,12 +236,13 @@ If `rmem` returns `INVALID_MEMORY_PATH` for a document command, remove the leadi
 ### Before project-related work
 
 1. Select the `<rmem>` invocation.
-2. Run `rmem check`.
-3. If check passes or only non-blocking warnings exist, run `rmem search` for task context.
-4. Read recommended documents through `rmem read`.
-5. Execute the user task.
-6. If memory changes are needed, use `rmem edit`, `rmem write`, `rmem remove`, or `rmem folder ...`.
-7. Run `rmem check` after memory changes.
+2. If project memory is not initialized, run `<rmem> init`.
+3. Run `<rmem> check`.
+4. If check passes or only non-blocking warnings exist, run `<rmem> search` for task context.
+5. Read recommended documents through `<rmem> read`.
+6. Execute the user task.
+7. If memory changes are needed, use `<rmem> edit`, `<rmem> write`, `<rmem> remove`, or `<rmem> folder ...`.
+8. Run `<rmem> check` after memory changes.
 
 ### Search
 
@@ -332,7 +371,7 @@ If `rmem check`, `search`, `write`, `list`, `read`, `edit`, or `remove` reports 
 Recommended action:
 
 ```bash
-<rmem> tree generate
+<rmem> init
 ```
 
 Then fill descriptions in `memory/tree-index.md` manually or with user-approved edits, and run:

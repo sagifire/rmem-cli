@@ -4,7 +4,26 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), а versioning має відповідати правилам із `docs/RELEASE.md`.
 
+## [1.1.3] - 2026-06-04
+
+### Added
+
+- Added compact YAML as the default output format for agent-facing commands. The previous JSON output remains available with `--json`; `rmem read` now returns YAML metadata followed by raw Markdown in default mode.
+- Added skill guidance that state-changing `rmem` commands must not be constrained by short timeouts because synchronous semantic indexing, local LLM calls, embedding generation, and vector index rebuilds can be slow.
+
+### Fixed
+
+- Fixed LLM note generation with Ollama when `sourceQuote` is grounded but whitespace-normalized by the model. The stored quote is mapped back to the original Markdown substring instead of falling back to the deterministic compiler.
+
+### Tests
+
+- Added regression tests for YAML default output, JSON compatibility via `--json`, `rmem read` YAML-plus-Markdown output, and whitespace-normalized grounded quotes.
+
 ## [1.1.2] - 2026-06-04
+
+### Added
+
+- Added `rmem init` as an idempotent project memory bootstrap command. It creates `.rmem/config.yaml`, `memory/`, and `memory/tree-index.md` when missing without overwriting an existing valid tree index.
 
 ### Fixed
 

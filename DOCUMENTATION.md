@@ -1,4 +1,4 @@
-# rmem-cli Documentation
+﻿# rmem-cli Documentation
 
 `rmem-cli` — це TypeScript CLI для документно-орієнтованої семантичної памʼяті проєкту.
 
@@ -20,7 +20,9 @@ rmem check
 memory/
 ```
 
-Усі команди повертають structured JSON. Human-readable режим окремо не реалізований.
+Agent-facing команди повертають compact YAML за замовчуванням. Для сумісності зі старим machine-readable режимом будь-яку команду можна запустити з `--json`.
+
+`rmem read` у default режимі повертає YAML metadata, порожній рядок, маркер `--- markdown ---`, а потім raw Markdown документа без JSON escaping.
 
 ## Конфігурація
 
@@ -121,7 +123,7 @@ Primary source for folder descriptions is `memory/tree-index.md`. The file is pl
 <!-- rmem:tree-index end -->
 ```
 
-If `tree-index.md` is missing or invalid, normal operations are blocked. Existing `memory/` folders can be scaffolded explicitly with `rmem tree generate`; folder descriptions must then be filled manually. A derived backup/cache is stored at `.rmem/index/tree-index.json` and can be used by `rmem tree repair`, but it is never used as a silent fallback.
+If `tree-index.md` is missing or invalid, normal operations are blocked. A project can be bootstrapped with `rmem init`; existing `memory/` folders can also be scaffolded explicitly with `rmem tree generate`. Folder descriptions must then be filled manually. A derived backup/cache is stored at `.rmem/index/tree-index.json` and can be used by `rmem tree repair`, but it is never used as a silent fallback.
 
 ### `indexing.noteRebuildMode`
 
@@ -143,7 +145,7 @@ If `tree-index.md` is missing or invalid, normal operations are blocked. Existin
 }
 ```
 
-LLM використовується як semantic compiler для derived notes. Він не є canonical source of truth. Якщо provider недоступний або повертає негрунтований JSON, CLI використовує deterministic note compiler і додає warning `LLM_PROVIDER_FAILED`.
+LLM використовується як semantic compiler для derived notes. Він не є canonical source of truth. Якщо provider недоступний, CLI використовує deterministic note compiler і додає warning `LLM_PROVIDER_FAILED`. Якщо provider доступний, але окремі notes не проходять grounding checks, CLI використовує deterministic compiler тільки для цих notes і додає warning `LLM_OUTPUT_GROUNDING_FAILED`.
 
 Ollama config:
 
@@ -339,6 +341,7 @@ Unsupported syntax повертає явну помилку, а не silent igno
 Public commands — стабільний agent-facing API:
 
 ```bash
+rmem init
 rmem search <query>
 rmem list [memory-path]
 rmem read <document-path>
@@ -355,6 +358,32 @@ rmem check
 rmem --version
 ```
 
+Global option for these commands:
+
+- `--json` — return the previous pretty-printed structured JSON output instead of default YAML.
+
+### `rmem init`
+
+Bootstraps project memory in the current working directory.
+
+```bash
+rmem init
+```
+
+Behavior:
+
+- creates `.rmem/config.yaml` if it is missing;
+- creates `memory/` if it is missing;
+- creates `memory/tree-index.md` from the existing `memory/` folder structure if it is missing;
+- does not overwrite an existing valid `memory/tree-index.md`;
+- returns `TREE_INDEX_INVALID` instead of overwriting a broken `memory/tree-index.md`.
+
+If generated folder descriptions are empty, `rmem init` returns `MEMORY_FOLDER_DESCRIPTION_EMPTY` warnings. Fill descriptions in `memory/tree-index.md`, then run:
+
+```bash
+rmem check
+```
+
 ### `rmem search <query>`
 
 Повертає one-shot context report.
@@ -368,6 +397,7 @@ rmem search "архітектура памʼяті"
 - `<query>` — пошуковий запит; усі аргументи після `search` обʼєднуються в один рядок.
 
 Опції: немає.
+Глобально підтримується `--json`.
 
 Поведінка:
 
@@ -404,6 +434,7 @@ rmem list project/architecture
 - `[memory-path]` — optional path у форматі `project/architecture`.
 
 Опції: немає.
+Глобально підтримується `--json`.
 
 ### `rmem read <document-path>`
 
@@ -415,7 +446,39 @@ rmem read architecture/system.md
 
 Аргументи:
 
-- `<document-path>` — шлях відносно `memoryRoot`.
+- `<document-path>` — шлях документа відносно `memory/`, без префікса `project/`.
+
+Опції:
+
+- `--json` — повертає старий JSON response з полем `content`.
+
+Default response format:
+
+```text
+ok: true
+document:
+  path: architecture/system.md
+  documentId: doc_architecture_system_md
+  title: "System Architecture"
+  kind: overview
+  status: draft
+  revision: 1
+  memoryPath:
+    - project
+    - architecture
+  language: en
+  summary: "System Architecture"
+documentHash: 0123456789abcdef...
+warnings: []
+
+--- markdown ---
+---
+title: "System Architecture"
+...
+---
+
+# System Architecture
+```
 
 Відповідь містить `documentHash`, який використовується для optimistic concurrency у `rmem edit`.
 
@@ -587,20 +650,20 @@ rmem check
 
 ### `rmem --version`
 
-Повертає machine-readable версію CLI.
+Повертає версію CLI.
 
 ```bash
 rmem --version
 ```
 
-Відповідь:
+Default відповідь:
 
-```json
-{
-    "ok": true,
-    "version": "1.1.2"
-}
+```yaml
+ok: true
+version: 1.1.3
 ```
+
+Для JSON використовуйте `rmem --version --json`.
 
 Версія читається з package metadata `rmem-cli/package.json`, щоб CLI не мав окремого hardcoded source-of-truth.
 
@@ -799,13 +862,13 @@ rmem dev providers check
 
 ### Success response
 
-Команди повертають JSON з `ok: true` і command-specific fields.
+Agent-facing commands return YAML with `ok: true` and command-specific fields by default.
 
-```json
-{
-    "ok": true
-}
+```yaml
+ok: true
 ```
+
+Use `--json` to return the previous pretty-printed JSON response.
 
 ### Error response
 
@@ -825,12 +888,15 @@ CLI встановлює non-zero exit code для `ok: false`.
 
 ### Stable CLI contract
 
-Agent-facing commands мають залишатися JSON-only:
+Agent-facing commands мають залишатися structured і machine-readable:
 
-- success: `ok: true`
-- error: `ok: false`, `code`, `message`
-- diagnostics: тільки під `rmem dev ...`
-- version metadata: `rmem --version`
+- default output: compact YAML;
+- JSON compatibility: add `--json`;
+- `rmem read` default output: YAML metadata + raw Markdown after `--- markdown ---`;
+- success: `ok: true`;
+- error: `ok: false`, `code`, `message`;
+- diagnostics: тільки під `rmem dev ...`;
+- version metadata: `rmem --version`.
 
 Package exports:
 

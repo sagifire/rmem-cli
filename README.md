@@ -7,6 +7,7 @@ Canonical knowledge lives in Markdown documents. Notes, links, structural places
 ## Public Commands
 
 ```bash
+rmem init
 rmem search <query>
 rmem list [memory-path]
 rmem read <document-path>
@@ -23,7 +24,7 @@ rmem check
 rmem --version
 ```
 
-Agent-facing commands return structured JSON by default.
+Agent-facing commands return compact YAML by default. Use `--json` on any command to keep the previous structured JSON output. `rmem read` returns YAML metadata followed by the raw Markdown document.
 
 ## Development Commands
 

@@ -204,13 +204,13 @@ function normalizeLlmSegment(
     place: StructuralPlace
 ): NoteSegment {
     const fallback = synthesizeSegment(content, frontmatter, place)
-    const sourceQuote = stringValue(output.sourceQuote)
-    if (sourceQuote === undefined || !content.includes(sourceQuote)) {
+    const sourceQuote = groundedQuoteValue(stringValue(output.sourceQuote), content)
+    if (sourceQuote === undefined) {
         return { ...fallback, usedFallback: true }
     }
 
     const canonicalStatement = stringValue(output.canonicalStatement)
-    const groundedCanonicalStatement = canonicalStatement !== undefined && sourceQuote.includes(canonicalStatement.replace(/…$/, '').slice(0, 40))
+    const groundedCanonicalStatement = canonicalStatement !== undefined && containsGroundedText(sourceQuote, canonicalStatement.replace(/…$/, '').slice(0, 40))
         ? canonicalStatement
         : synthesizeSegment(sourceQuote, frontmatter, place).canonicalStatement
 
@@ -380,6 +380,50 @@ function stringArray(value: unknown): string[] | undefined {
     }
 
     return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim())
+}
+
+function groundedQuoteValue(value: string | undefined, content: string): string | undefined {
+    if (value === undefined) {
+        return undefined
+    }
+
+    if (content.includes(value)) {
+        return value
+    }
+
+    return findWhitespaceNormalizedSubstring(content, value)
+}
+
+function containsGroundedText(source: string, value: string): boolean {
+    if (source.includes(value)) {
+        return true
+    }
+
+    return findWhitespaceNormalizedSubstring(source, value) !== undefined
+}
+
+function findWhitespaceNormalizedSubstring(source: string, candidate: string): string | undefined {
+    const normalizedCandidate = candidate.replace(/\s+/g, ' ').trim()
+    if (normalizedCandidate.length === 0) {
+        return undefined
+    }
+
+    const match = normalizedCandidate.match(/\S+/gu)
+    if (match === null) {
+        return undefined
+    }
+
+    const pattern = match.map(escapeRegExp).join('\\s+')
+    const result = new RegExp(pattern, 'u').exec(source)
+    if (result === null || result.index === undefined) {
+        return undefined
+    }
+
+    return source.slice(result.index, result.index + result[0].length).trim()
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 function compact(value: string, maxChars: number): string {

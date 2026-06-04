@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, rmSync, writeFileSync, readdirSync } from 'node:fs'
+﻿import { existsSync, mkdirSync, rmSync, writeFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
@@ -38,8 +38,8 @@ if (!existsSync(rmemCli)) {
     throw new Error('rmem CLI entrypoint was not installed.')
 }
 
-const version = runJson(process.execPath, [rmemCli, '--version'], appRoot)
-if (version.ok !== true || version.version !== '1.1.2') {
+const version = runJson(process.execPath, [rmemCli, '--version', '--json'], appRoot)
+if (version.ok !== true || version.version !== '1.1.3') {
     throw new Error(`Unexpected rmem --version output: ${JSON.stringify(version)}`)
 }
 
@@ -75,7 +75,7 @@ writeFileSync(treeIndexPath, [
 writeFileSync(docPath, '# Package Smoke\n\nInstalled package writes canonical memory.\n', 'utf8')
 run(process.execPath, [rmemCli, 'write', 'smoke.md', '--from', docPath], appRoot, { quiet: true })
 
-const check = runJson(process.execPath, [rmemCli, 'check'], appRoot)
+const check = runJson(process.execPath, [rmemCli, 'check', '--json'], appRoot)
 if (check.ok !== true || check.valid !== true) {
     throw new Error(`Installed package check failed: ${JSON.stringify(check)}`)
 }
