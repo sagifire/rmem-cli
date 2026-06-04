@@ -47,6 +47,17 @@ export async function buildVectorIndex(input: {
     now: string
 }): Promise<VectorIndexState> {
     const activeNotes = input.notes.filter((note) => note.status === 'active')
+    if (activeNotes.length === 0) {
+        return {
+            schemaVersion: 1,
+            provider: input.providerName,
+            model: input.model,
+            dimensions: 0,
+            vectors: [],
+            updatedAt: input.now
+        }
+    }
+
     const vectors = await input.provider.embedTexts(activeNotes.map((note) => note.retrievalText))
     const firstVector = vectors[0]
     const dimensions = firstVector?.length ?? 0
@@ -106,7 +117,7 @@ export function isVectorIndexCompatible(index: VectorIndexState | undefined, pro
     return index !== undefined
         && index.provider === providerName
         && index.model === model
-        && index.dimensions > 0
+        && (index.dimensions > 0 || index.vectors.length === 0)
 }
 
 function tokenize(value: string): string[] {

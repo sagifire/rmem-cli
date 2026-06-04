@@ -203,6 +203,17 @@ test('folder commands manage agent-facing memory areas', async () => {
         const treeContent = await readFile(join(root, 'memory', 'tree-index.md'), 'utf8')
         assert.equal(treeContent.includes('project/research'), true)
 
+        const rootList = await listCommand(root)
+        assert.equal(rootList.ok, true)
+        assert.equal(rootList.items.some((item) => item.type === 'area' && item.key === 'project/research'), true)
+
+        const invalidDocumentPath = await writeCommand(root, 'project/research/memory.md', '# Invalid\n\nBody\n')
+        assert.equal(isCommandError(invalidDocumentPath), true)
+        if (isCommandError(invalidDocumentPath)) {
+            assert.equal(invalidDocumentPath.code, 'INVALID_MEMORY_PATH')
+            assert.equal(invalidDocumentPath.suggestion?.includes('research/memory.md'), true)
+        }
+
         const write = await writeCommand(root, 'research/memory.md', '# Memory Research\n\nDocuments define memory structure.\n')
         assert.equal(write.ok, true)
         assert.deepEqual(write.document.memoryPath, ['project', 'research'])
@@ -671,6 +682,56 @@ test('LLM grounding fallback marks deterministic generator', async () => {
 
     assert.equal(notes.length, 1)
     assert.equal(notes[0]?.generated.generator, 'deterministic-semantic-compiler:v1')
+})
+
+test('LLM canonical paraphrase is normalized without provider fallback', async () => {
+    const notes = await generateLlmDerivedNotes({
+        documentPath: 'memory.md',
+        frontmatter: {
+            title: 'Memory',
+            tags: [],
+            rmem: {
+                schemaVersion: 1,
+                documentId: 'doc_memory',
+                kind: 'rules',
+                status: 'active',
+                createdAt: '2026-06-03T00:00:00.000Z',
+                updatedAt: '2026-06-03T00:00:00.000Z',
+                revision: 1,
+                memoryPath: ['project'],
+                language: 'en'
+            }
+        },
+        places: [{
+            id: 'place_memory',
+            documentId: 'doc_memory',
+            documentPath: 'memory.md',
+            headingPath: ['Memory'],
+            title: 'Memory',
+            level: 1,
+            orderIndex: 0,
+            sourceHash: 'source'
+        }],
+        bodyByPlace: new Map([['place_memory', 'Agents must use rmem search before changing project memory. Agents must report iteration progress after significant changes.']]),
+        existingNotes: [],
+        now: '2026-06-03T00:00:00.000Z',
+        generator: 'ollama:qwen2.5:7b',
+        llm: {
+            async generateJson<TInput, TOutput>() {
+                const output = {
+                    title: 'Agent rules',
+                    sourceQuote: 'Agents must use rmem search before changing project memory. Agents must report iteration progress after significant changes.',
+                    sourceSummary: 'Agents have rules for memory use and reporting.',
+                    canonicalStatement: 'Agents should use rmem search before changing memory and report progress.'
+                }
+                return output as TOutput
+            }
+        }
+    })
+
+    assert.equal(notes.length, 1)
+    assert.equal(notes[0]?.generated.generator, 'ollama:qwen2.5:7b')
+    assert.equal(notes[0]?.canonicalStatement, 'Agents must use rmem search before changing project memory.')
 })
 
 async function writeOfflineConfig(root: string): Promise<void> {

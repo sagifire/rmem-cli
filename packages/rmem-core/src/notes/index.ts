@@ -182,6 +182,7 @@ async function compileLlmSegment(
             'Create one grounded memory note from the provided Markdown section.',
             'Use only facts present in the source content.',
             'sourceQuote must be an exact contiguous substring copied from content.',
+            'canonicalStatement must be an exact sentence or phrase copied from sourceQuote.',
             'Return JSON object with title, sourceQuote, sourceSummary, canonicalStatement, type, tags, aliases, entities.'
         ].join('\n')
     }, {
@@ -209,19 +210,19 @@ function normalizeLlmSegment(
     }
 
     const canonicalStatement = stringValue(output.canonicalStatement)
-    if (canonicalStatement !== undefined && !sourceQuote.includes(canonicalStatement.replace(/…$/, '').slice(0, 40))) {
-        return { ...fallback, usedFallback: true }
-    }
+    const groundedCanonicalStatement = canonicalStatement !== undefined && sourceQuote.includes(canonicalStatement.replace(/…$/, '').slice(0, 40))
+        ? canonicalStatement
+        : synthesizeSegment(sourceQuote, frontmatter, place).canonicalStatement
 
     const segment: NoteSegment = {
         title: stringValue(output.title) ?? fallback.title,
         sourceQuote,
         sourceSummary: stringValue(output.sourceSummary) ?? fallback.sourceSummary,
-        canonicalStatement: canonicalStatement ?? fallback.canonicalStatement,
+        canonicalStatement: groundedCanonicalStatement,
         retrievalSeed: [
             stringValue(output.title) ?? fallback.title,
             stringValue(output.sourceSummary) ?? fallback.sourceSummary,
-            canonicalStatement ?? fallback.canonicalStatement,
+            groundedCanonicalStatement,
             sourceQuote
         ].join('\n')
     }

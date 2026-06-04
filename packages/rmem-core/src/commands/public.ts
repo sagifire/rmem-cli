@@ -67,7 +67,9 @@ export async function listCommand(root: string, pathInput?: string): Promise<Com
     const items: ListResponse['items'] = []
 
     for (const [key, area] of Object.entries(config.areas)) {
-        if (area.parent === areaKey || (areaKey === undefined && area.parent === undefined)) {
+        const includeRootArea = areaKey === undefined && area.parent === undefined
+        const includeProjectChild = areaKey === undefined && area.parent === 'project'
+        if (area.parent === areaKey || includeRootArea || includeProjectChild) {
             const item: ListResponse['items'][number] = {
                 type: 'area',
                 key,
@@ -121,6 +123,11 @@ export async function listCommand(root: string, pathInput?: string): Promise<Com
 }
 
 export async function readCommand(root: string, documentPath: string): Promise<CommandResult<ReadDocumentResponse>> {
+    const pathError = documentPathMemoryRootError(documentPath)
+    if (pathError !== undefined) {
+        return pathError
+    }
+
     const config = await loadConfig(root)
     if (isCommandError(config)) {
         return config
@@ -162,6 +169,11 @@ export async function readCommand(root: string, documentPath: string): Promise<C
 }
 
 export async function writeCommand(root: string, documentPath: string, contentInput: string): Promise<CommandResult<WriteDocumentResponse>> {
+    const pathError = documentPathMemoryRootError(documentPath)
+    if (pathError !== undefined) {
+        return pathError
+    }
+
     const config = await loadConfig(root)
     if (isCommandError(config)) {
         return config
@@ -557,6 +569,28 @@ function validateDocumentFolder(config: RmemConfig, documentPath: string): Retur
     })
 }
 
+function documentPathMemoryRootError(documentPath: string): ReturnType<typeof commandError> | undefined {
+    const units = toRegistryDocumentPath(documentPath)
+        .split('/')
+        .filter((unit) => unit.length > 0 && unit !== '.')
+
+    if (units[0] !== 'project') {
+        return undefined
+    }
+
+    const suggestedPath = units.slice(1).join('/')
+    const suggestedFolder = units.slice(1, -1).join('/')
+    const memoryFolder = suggestedFolder.length > 0 ? `project/${suggestedFolder}` : 'project'
+    return commandError({
+        code: 'INVALID_MEMORY_PATH',
+        message: 'Document path must be relative to memory root and must not start with project/.',
+        details: { documentPath },
+        suggestion: suggestedPath.length > 0
+            ? `Use ${suggestedPath} for memory folder ${memoryFolder}.`
+            : 'Use a document path such as overview.md or rules/agent-rules.md.'
+    })
+}
+
 function documentMemoryPathFromPath(documentPath: string): string[] {
     const folderUnits = toRegistryDocumentPath(dirname(documentPath))
         .split('/')
@@ -828,6 +862,11 @@ export async function editCommand(root: string, documentPath: string, request: E
 }
 
 export async function removeCommand(root: string, documentPath: string): Promise<CommandResult<WriteDocumentResponse>> {
+    const pathError = documentPathMemoryRootError(documentPath)
+    if (pathError !== undefined) {
+        return pathError
+    }
+
     const config = await loadConfig(root)
     if (isCommandError(config)) {
         return config

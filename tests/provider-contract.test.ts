@@ -2,10 +2,14 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+    buildVectorIndex,
     FlagEmbeddingHttpProvider,
     OllamaLlmProvider,
     OpenAiCompatibleLlmProvider,
-    checkProviders
+    checkProviders,
+    isVectorIndexCompatible,
+    type EmbeddingProvider,
+    type EmbeddingVector
 } from '../packages/rmem-core/dist/index.js'
 
 type RecordedRequest = {
@@ -19,6 +23,37 @@ type TestServer = {
     requests: RecordedRequest[]
     close: () => Promise<void>
 }
+
+class RejectingEmptyEmbeddingProvider implements EmbeddingProvider {
+    public calls = 0
+
+    async embedTexts(texts: string[]): Promise<EmbeddingVector[]> {
+        this.calls += 1
+        if (texts.length === 0) {
+            throw new Error('Provider must not be called for empty note sets.')
+        }
+
+        return texts.map(() => [1, 0, 0])
+    }
+}
+
+test('vector index rebuild does not call embedding provider for empty note set', async () => {
+    const provider = new RejectingEmptyEmbeddingProvider()
+    const index = await buildVectorIndex({
+        notes: [],
+        provider,
+        providerName: 'flagembedding',
+        model: 'BAAI/bge-m3',
+        now: '2026-06-03T00:00:00.000Z'
+    })
+
+    assert.equal(provider.calls, 0)
+    assert.equal(index.provider, 'flagembedding')
+    assert.equal(index.model, 'BAAI/bge-m3')
+    assert.equal(index.dimensions, 0)
+    assert.deepEqual(index.vectors, [])
+    assert.equal(isVectorIndexCompatible(index, 'flagembedding', 'BAAI/bge-m3'), true)
+})
 
 test('Ollama provider sends generate request and parses JSON response', async () => {
     const server = await startJsonServer((request) => {

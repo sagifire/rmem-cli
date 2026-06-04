@@ -61,6 +61,18 @@ test('public command response contracts stay stable', async () => {
                     description: 'Offline test memory.'
                 },
                 {
+                    type: 'area',
+                    key: 'project/architecture',
+                    title: 'Architecture',
+                    description: 'Architecture memory.'
+                },
+                {
+                    type: 'area',
+                    key: 'project/guide',
+                    title: 'Guide',
+                    description: 'Guides.'
+                },
+                {
                     type: 'document',
                     key: 'architecture/memory.md',
                     title: 'Project Memory',

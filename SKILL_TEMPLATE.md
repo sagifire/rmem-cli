@@ -1,6 +1,6 @@
 ---
 name: memory-of-relics
-description: Document-oriented semantic project memory workflow powered by rmem-cli 1.1.1. Use for project tasks that require context from //memory, including architecture, rules, plans, tasks, docs, implementation decisions, and agent workflow requirements. If the user request is project-related and involves changes, planning, decisions, context, or implementation work, load this skill first.
+description: Document-oriented semantic project memory workflow powered by rmem-cli 1.1.2. Use for project tasks that require context from //memory, including architecture, rules, plans, tasks, docs, implementation decisions, and agent workflow requirements. If the user request is project-related and involves changes, planning, decisions, context, or implementation work, load this skill first.
 license: MIT
 ---
 
@@ -117,7 +117,7 @@ Expected version for this template:
 ```json
 {
     "ok": true,
-    "version": "1.1.1"
+    "version": "1.1.2"
 }
 ```
 
@@ -143,6 +143,55 @@ Normal agent-facing commands:
 ```
 
 Diagnostic commands live under `rmem dev ...`. Do not use them in normal workflow unless the user explicitly asks for diagnostics or the task is about `rmem-cli` development.
+
+## Path Parameters
+
+`rmem-cli` has two different path types. Do not mix them.
+
+### Memory folder paths
+
+Use semantic memory paths with the `project/` root only for folder/list commands:
+
+```bash
+<rmem> list project/rules
+<rmem> folder create project/rules --description "Agent and developer operating rules."
+<rmem> folder update project/rules --description "Updated rules description."
+<rmem> folder move project/rules project/agent-rules --description "Agent rules."
+<rmem> folder remove project/old-area
+```
+
+These paths refer to entries in `memory/tree-index.md`.
+
+### Document paths
+
+Use document paths relative to `//memory` for document commands. Never prefix document paths with `project/`.
+
+Correct:
+
+```bash
+<rmem> write rules/agent-memory-and-iteration-reporting.md --from ./agent-rules.md
+<rmem> read rules/agent-memory-and-iteration-reporting.md
+<rmem> edit rules/agent-memory-and-iteration-reporting.md < edit-request.json
+<rmem> remove rules/agent-memory-and-iteration-reporting.md
+```
+
+Incorrect:
+
+```bash
+<rmem> write project/rules/agent-memory-and-iteration-reporting.md --from ./agent-rules.md
+```
+
+Reason: `project/rules` is the semantic memory folder path, but `rules/agent-memory-and-iteration-reporting.md` is the physical document path under `//memory`.
+
+Mapping examples:
+
+| Memory folder path | Document path example |
+| --- | --- |
+| `project` | `overview.md` |
+| `project/rules` | `rules/agent-rules.md` |
+| `project/architecture` | `architecture/system.md` |
+
+If `rmem` returns `INVALID_MEMORY_PATH` for a document command, remove the leading `project/` from the document path and retry.
 
 ## Standard Workflow
 

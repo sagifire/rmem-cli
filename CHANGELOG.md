@@ -4,6 +4,20 @@
 
 Формат базується на [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), а versioning має відповідати правилам із `docs/RELEASE.md`.
 
+## [1.1.2] - 2026-06-04
+
+### Fixed
+
+- Fixed root `rmem list` output so direct child folders of `project` are visible without requiring a separate `rmem list project` call.
+- Fixed document command validation to reject `project/...` document paths with a clear `INVALID_MEMORY_PATH` suggestion. Document paths are relative to `memory/`, while folder paths use semantic `project/...` memory paths.
+- Fixed vector index rebuild for empty note sets so configured BGE-M3/FlagEmbedding providers are not called with `texts: []`.
+- Fixed LLM note generation with Ollama: valid LLM notes are no longer discarded when only `canonicalStatement` is a paraphrase. The canonical statement is normalized to a grounded phrase from `sourceQuote`.
+- Fixed LLM diagnostics by separating real provider failures (`LLM_PROVIDER_FAILED`) from grounding failures (`LLM_OUTPUT_GROUNDING_FAILED`).
+
+### Tests
+
+- Added regression tests for root folder listing, invalid `project/...` document paths, empty embedding rebuilds, and Ollama-style canonical paraphrase normalization.
+
 ## [1.1.1] - 2026-06-03
 
 ### Fixed

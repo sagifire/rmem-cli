@@ -108,7 +108,7 @@ export async function generateNotesBestEffort(input: {
                 notes,
                 warnings: groundedFallbacks > 0
                     ? [{
-                        code: 'LLM_PROVIDER_FAILED',
+                        code: 'LLM_OUTPUT_GROUNDING_FAILED',
                         message: 'LLM output failed grounding checks for some notes; deterministic note compiler was used for those notes.',
                         details: { fallbackNotes: groundedFallbacks }
                     }]
