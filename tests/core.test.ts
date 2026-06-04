@@ -447,7 +447,7 @@ test('CLI returns version metadata', () => {
     assert.equal(result.status, 0)
     const parsed = JSON.parse(result.stdout) as { ok: boolean, version: string }
     assert.equal(parsed.ok, true)
-    assert.equal(parsed.version, '1.1.1')
+    assert.equal(parsed.version, '1.1.2')
 })
 
 test('frontmatter parser decodes quoted scalar escapes', () => {
